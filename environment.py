@@ -12,10 +12,15 @@ import utils
 from utils import Pybullet_Utils
 from uuid import uuid4
 import open3d as o3d
+from enum import Enum
+
+
 
 
 
 SIMULATION_STEP_DELAY = 1 / 240.
+
+
 
 class Environment(gym.Env):
 
@@ -60,7 +65,7 @@ class Environment(gym.Env):
         W = 2064   # image width
         self.camera = Camera(K, H, W)
         self.camera.id = self._load_mesh(f'resources/camera/kinectsensor.obj', 
-                                         ob_in_world=self.camera.pose_in_world, mass=0, 
+                                         ob_in_world=self.camera.view_matrix, mass=0, 
                                          has_collision=False)
         self.camera.getCameraImage = self.getCameraImage
         self.env_body_ids.append(self.camera.id)
@@ -74,6 +79,9 @@ class Environment(gym.Env):
         add_success = self._add_objects()
         while add_success == False:
             add_success = self._add_objects()
+
+        self.debug_frame = dict()
+        self.frame_gripper = self._draw_frame(frame_in_world=np.eye(4), frame_name='gripper_in_world', replace_item_unique_id=None)
 
 
     #---------------------------------------------------------------------------
@@ -102,11 +110,12 @@ class Environment(gym.Env):
     def step(self, action_param):
         self._num_step += 1
         self.grasp_in_camera_T, self.grasp_in_camera_quatern  = self._param_to_grasp(grasp_param=action_param)
-        _grasp_in_world = self.camera.pose_in_world @ self.grasp_in_camera_T
+        _grasp_in_world = self.camera.view_matrix @ self.grasp_in_camera_T
         gripper_in_world = _grasp_in_world @ np.linalg.inv(self.gripper.grasp_in_gripper)
-        
+
         self.gripper.open()
         self.bullet_utils.set_body_pose_in_world(self.gripper.id, gripper_in_world)
+        self.frame_gripper = self._draw_frame(frame_in_world=_grasp_in_world, frame_name='gripper_in_world', replace_item_unique_id=self.frame_gripper)
         self.gripper.close()
         
         terminated = self._is_grasp_success()
@@ -130,6 +139,7 @@ class Environment(gym.Env):
        
         self.sim.stepSimulation()
         if self._vis:
+            self.update_debug_frame()
             time.sleep(SIMULATION_STEP_DELAY)
 
 
@@ -213,7 +223,7 @@ class Environment(gym.Env):
         bg_mask = depth<0.1
         for id in self.env_body_ids:
             bg_mask[seg==id] = 1
-        pts = utils.depth2xyzmap(depth, self.camera._K)
+        pts = utils.depth2xyzmap(depth, self.camera._k)
         pts_no_bg = pts[bg_mask==0].reshape(-1,3)
         downsample_indxs = utils.farthest_point_sample(pts_no_bg, self.observation_space.shape[0])
         return pts_no_bg[downsample_indxs]
@@ -282,16 +292,15 @@ class Environment(gym.Env):
 
     def getCameraImage(self, width, height, viewMatrix, projectionMatrix, shadow, lightDirection):
         
-        w, h, rgb, depth, seg = self.sim.getCameraImage(width=width, height=height, viewMatrix=viewMatrix, 
+        width, height, rgb, depth, seg = self.sim.getCameraImage(width=width, height=height, viewMatrix=viewMatrix, 
                                                         projectionMatrix=projectionMatrix, shadow=shadow, 
                                                         lightDirection=lightDirection)
-        return w, h, rgb, depth, seg
+        return width, height, rgb, depth, seg
 
 
     #---------------------------------------------------------------------------
     # Helper Functions
     #---------------------------------------------------------------------------
-
     def _load_mesh(self, obj_file, ob_in_world, mass, scale=np.ones(3),has_collision=True,useFixedBase=False,concave=False,collision_margin=0.0001):
 
         if obj_file in self.mesh_to_urdf:
@@ -309,7 +318,11 @@ class Environment(gym.Env):
         self.sim.changeDynamics(ob_id, -1, collisionMargin=collision_margin)
         return ob_id
     
+    
 
+    #---------------------------------------------------------------------------
+    # Debug Function
+    #---------------------------------------------------------------------------
     def log(self, log_dir='logs'):
         
         pcd = utils.toOpen3dCloud(self.last_obs)
@@ -317,6 +330,87 @@ class Environment(gym.Env):
         act_path = obs_path.replace('obs', 'act')
         o3d.io.write_point_cloud(obs_path, pcd)
         self.gripper.export(grasp_in_camera=self.grasp_in_camera_T, out_dir=act_path)
-    
 
+
+    def update_debug_frame(self):
+        
+        for base, dict0 in self.debug_frame.items():
+            for link, dict1 in dict0.items():
+                self._draw_frame(base, link, dict1['name'], dict1['replace_item_unique_id'])
+
+
+    def _add_debug_frame(self, base, link):
+
+        if self.debug_frame.get(base) is None:
+            self.debug_frame[base] = dict()
+        if self.debug_frame[base].get(link) is None:
+            data = dict()
+            data['name'] = f'{self.bullet_utils.get_link_name(base, link)}_frame'
+            data['replace_item_unique_id'] = self._draw_frame(base, link, data['name'])
+            self.debug_frame[base][link] = data
+
+
+    def _draw_frame(self, base, link, frame_name, replace_item_unique_id = None):
+
+        link_in_world = self.bullet_utils.get_link_pose_in_world(base, link)
+        axis_scale = 0.1
+        frame_origin= np.array(link_in_world[0])
+        frame_direction = np.array(self.sim.getMatrixFromQuaternion(link_in_world[1])).reshape((3, 3))
+
+        kwargs = dict()
+        kwargs['lineWidth'] = 3
+
+        kwargs['lineColorRGB'] = [1, 0, 0]
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[0]
+        axis_x_id = self.sim.addUserDebugLine(frame_origin, frame_origin + axis_scale * frame_direction[0:3, 0], **kwargs)
+
+        kwargs['lineColorRGB'] = [0, 1, 0]
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[1]
+        axis_y_id = self.sim.addUserDebugLine(frame_origin, frame_origin + axis_scale * frame_direction[0:3, 1], **kwargs)
+
+        kwargs['lineColorRGB'] = [0, 0, 1]
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[2]
+        axis_z_id = self.sim.addUserDebugLine(frame_origin, frame_origin + axis_scale * frame_direction[0:3, 2], **kwargs)
+
+        kwargs.clear()
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[3]
+        frame_name_id = self.sim.addUserDebugText(frame_name, frame_origin, **kwargs)
+
+        return axis_x_id, axis_y_id, axis_z_id, frame_name_id
+
+
+    def _draw_frame(self, frame_in_world, frame_name, replace_item_unique_id=None):
+
+        axis_scale = 0.1
+        frame_origin= frame_in_world[0:3,3]
+        frame_direction = utils.normalizeRotation(frame_in_world[0:3,0:3])
+
+        kwargs = dict()
+        kwargs['lineWidth'] = 3
+
+        kwargs['lineColorRGB'] = [1, 0, 0]
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[0]
+        axis_x_id = self.sim.addUserDebugLine(frame_origin, frame_origin + axis_scale * frame_direction[0:3, 0], **kwargs)
+
+        kwargs['lineColorRGB'] = [0, 1, 0]
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[1]
+        axis_y_id = self.sim.addUserDebugLine(frame_origin, frame_origin + axis_scale * frame_direction[0:3, 1], **kwargs)
+
+        kwargs['lineColorRGB'] = [0, 0, 1]
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[2]
+        axis_z_id = self.sim.addUserDebugLine(frame_origin, frame_origin + axis_scale * frame_direction[0:3, 2], **kwargs)
+
+        kwargs.clear()
+        if replace_item_unique_id is not None:
+            kwargs['replaceItemUniqueId'] = replace_item_unique_id[3]
+        frame_name_id = self.sim.addUserDebugText(frame_name, frame_origin, **kwargs)
+
+        return axis_x_id, axis_y_id, axis_z_id, frame_name_id
     

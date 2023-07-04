@@ -1,7 +1,6 @@
 import numpy as np
 from transformations import *
-import copy, trimesh
-from uuid import uuid4
+import copy
 import open3d as o3d
 from collections import namedtuple
 import math
@@ -280,6 +279,15 @@ def euler_matrix(ai, aj, ak, axes='sxyz'):
     return M
 
 
+def normalizeRotation(pose):
+
+    new_pose = pose.copy()
+    scales = np.linalg.norm(pose[:3,:3],axis=0)
+    new_pose[:3,:3] /= scales.reshape(1,3)
+    return new_pose
+
+
+
 #---------------------------------------------------------------------------
 # Pybullet Functions
 #---------------------------------------------------------------------------
@@ -299,7 +307,6 @@ CIRCULAR_LIMITS = Interval(-PI, PI)
 UNBOUNDED_LIMITS = Interval(-INF, INF)
 
 
-
 class Pybullet_Utils:
 
     def __init__(self, sim):
@@ -315,6 +322,7 @@ class Pybullet_Utils:
 
 
     def get_ob_pose_in_world(self, body_id):
+        
         trans,q_xyzw = self._sim.getBasePositionAndOrientation(body_id)
         ob_in_world = np.eye(4)
         ob_in_world[:3,3] = trans
@@ -330,7 +338,6 @@ class Pybullet_Utils:
 
 
     def set_joint_position(self, body, joint, value):
-        # TODO: remove targetVelocity=0
         self._sim.resetJointState(body, joint, targetValue=value, targetVelocity=0, physicsClientId=CLIENT)
 
 
@@ -346,9 +353,7 @@ class Pybullet_Utils:
 
 
     def get_joint_limits(self, body, joint):
-        # TODO: make a version for several joints?
         if self.is_circular(body, joint):
-            # TODO: return UNBOUNDED_LIMITS
             return CIRCULAR_LIMITS
         joint_info = self.get_joint_info(body, joint)
         return joint_info.jointLowerLimit, joint_info.jointUpperLimit
@@ -364,5 +369,32 @@ class Pybullet_Utils:
 
     def get_joint_positions(self, body, joints):
         return tuple(self.get_joint_position(body, joint) for joint in joints)
+    
+
+    def get_link_name(self, base, link):
+    
+        if link == -1:
+            link_name = self._sim.getBodyInfo(base)[0]
+        else:
+            link_name = self._sim.getJointInfo(base, link)[12]
+
+        return link_name
 
 
+    def get_link_pose_in_world(self, base, link):
+        
+        if link == -1:
+            world_inertial_pose = self._sim.getBasePositionAndOrientation(base)
+            dynamics_info = self._sim.getDynamicsInfo(base, link)
+            local_inertial_pose = (dynamics_info[3], dynamics_info[4])
+
+            local_inertial_pose_inv = self._sim.invertTransform(local_inertial_pose[0], local_inertial_pose[1])
+            pos_orn = self._sim.multiplyTransforms(world_inertial_pose[0],
+                                                world_inertial_pose[1],
+                                                local_inertial_pose_inv[0],
+                                                local_inertial_pose_inv[1])
+        else:
+            state = self._sim.getLinkState(base, link)
+            pos_orn = (state[4], state[5])
+
+        return pos_orn
