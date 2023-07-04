@@ -26,7 +26,7 @@ class Environment(gym.Env):
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(5000,3), dtype=np.float32)
         self.action_space = spaces.Box(action_down, action_up, shape=(10,), dtype=np.float32)
 
-        self.workspace_limits = np.asarray([[-0.724, -0.276], [-0.224, 0.224], [-0.0001, 0.4]])
+        self.workspace_limits = np.asarray([[0.276, 0.724], [-0.224, 0.224], [-0.0001, 0.4]])
 
         # Connect to simulator
         self._vis = vis

@@ -15,7 +15,7 @@ class Camera:
         y0 = 0
         self.zfar = 100
         self.znear = 0.1
-        self.projectionMatrix = \
+        self._projectionMatrix = \
         np.array([[2*K[0,0]/self._W, -2*K[0,1]/self._W, (self._W - 2*K[0,2] + 2*x0)/self._W,                        0],
                     [          0,     2*K[1,1]/self._H,  (-self._H + 2*K[1,2] + 2*y0)/self._H,                       0],
                     [          0,        0,             (-self.zfar - self.znear)/(self.zfar - self.znear),  -2*self.zfar*self.znear/(self.zfar - self.znear)],
@@ -34,9 +34,12 @@ class Camera:
         gl_in_cv[2,2] = -1
         world_in_cam = np.linalg.inv(self.pose_in_world)
         world_in_cam_gl = gl_in_cv @ world_in_cam
-        _,_,rgb,depth,seg = self.getCameraImage(self._W, self._H, viewMatrix=world_in_cam_gl.T.reshape(-1),
-                                                projectionMatrix=self.projectionMatrix.T.reshape(-1),
-                                                shadow=1, lightDirection=[1, 1, 1])
+        _,_,rgb,depth,seg = self.getCameraImage(self._W, 
+                                                self._H, 
+                                                viewMatrix=world_in_cam_gl.T.reshape(-1),
+                                                projectionMatrix=self._projectionMatrix.T.reshape(-1),
+                                                shadow=1, 
+                                                lightDirection=[1, 1, 1])
         depth = self.zfar * self.znear / (self.zfar - (self.zfar - self.znear) * depth)
         depth[seg<0] = 0
         rgb = rgb[...,:3]

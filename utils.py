@@ -324,17 +324,14 @@ class Pybullet_Utils:
         return ob_in_world
 
 
-
-
-
     def set_joint_positions(self, body, joints, values):
-        for joint, value in utils.safe_zip(joints, values):
+        for joint, value in safe_zip(joints, values):
             self.set_joint_position(body, joint, value)
 
 
     def set_joint_position(self, body, joint, value):
         # TODO: remove targetVelocity=0
-        p.resetJointState(body, joint, targetValue=value, targetVelocity=0, physicsClientId=CLIENT)
+        self._sim.resetJointState(body, joint, targetValue=value, targetVelocity=0, physicsClientId=CLIENT)
 
 
     def get_joint_info(self, body, joint):
@@ -343,7 +340,7 @@ class Pybullet_Utils:
 
     def is_circular(self, body, joint):
         joint_info = self.get_joint_info(body, joint)
-        if joint_info.jointType == p.JOINT_FIXED:
+        if joint_info.jointType == self._sim.JOINT_FIXED:
             return False
         return joint_info.jointUpperLimit < joint_info.jointLowerLimit
 
