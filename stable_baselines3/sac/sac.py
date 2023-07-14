@@ -1,24 +1,23 @@
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
-
 import numpy as np
 import torch as th
 from gymnasium import spaces
 from torch.nn import functional as F
-
 from stable_baselines3.common.buffers import ReplayBuffer
 from stable_baselines3.common.noise import ActionNoise
 from stable_baselines3.common.off_policy_algorithm import OffPolicyAlgorithm
 from stable_baselines3.common.policies import BasePolicy, ContinuousCritic
 from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedule
 from stable_baselines3.common.utils import get_parameters_by_name, polyak_update
-from stable_baselines3.sac.policies import Actor, CnnPolicy, MlpPolicy, MultiInputPolicy, SACPolicy
+from stable_baselines3.sac.policies import Actor, MlpPolicy, SACPolicy
+
 
 SelfSAC = TypeVar("SelfSAC", bound="SAC")
 
 
 class SAC(OffPolicyAlgorithm):
-    """
-    Soft Actor-Critic (SAC)
+    
+    """ Soft Actor-Critic (SAC)
     Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor,
     This implementation borrows code from original implementation (https://github.com/haarnoja/sac)
     from OpenAI Spinning Up (https://github.com/openai/spinningup), from the softlearning repo
@@ -76,17 +75,13 @@ class SAC(OffPolicyAlgorithm):
         Setting it to auto, the code will be run on the GPU if possible.
     :param _init_setup_model: Whether or not to build the network at the creation of the instance
     """
-
-    policy_aliases: Dict[str, Type[BasePolicy]] = {
-        "MlpPolicy": MlpPolicy,
-        "CnnPolicy": CnnPolicy,
-        "MultiInputPolicy": MultiInputPolicy,
-    }
+    
+    policy_aliases = {"MlpPolicy": MlpPolicy}
     policy: SACPolicy
     actor: Actor
     critic: ContinuousCritic
     critic_target: ContinuousCritic
-
+    
     def __init__(
         self,
         policy: Union[str, Type[SACPolicy]],
@@ -116,6 +111,7 @@ class SAC(OffPolicyAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
+        location_temperature = 0.1
     ):
         super().__init__(
             policy,
@@ -152,10 +148,12 @@ class SAC(OffPolicyAlgorithm):
         self.ent_coef = ent_coef
         self.target_update_interval = target_update_interval
         self.ent_coef_optimizer: Optional[th.optim.Adam] = None
-
+        self.location_temperature = location_temperature
+        
         if _init_setup_model:
             self._setup_model()
 
+    
     def _setup_model(self) -> None:
         super()._setup_model()
         self._create_aliases()
@@ -191,12 +189,18 @@ class SAC(OffPolicyAlgorithm):
             # is passed
             self.ent_coef_tensor = th.tensor(float(self.ent_coef), device=self.device)
 
+    
     def _create_aliases(self) -> None:
         self.actor = self.policy.actor
         self.critic = self.policy.critic
         self.critic_target = self.policy.critic_target
 
-    def train(self, gradient_steps: int, batch_size: int = 64) -> None:
+    
+    def train(self, gradient_steps, batch_size=64):
+        
+        ''' based data in replay buffer to gradient aescent
+        ''' 
+
         # Switch to train mode (this affects batch norm / dropout)
         self.policy.set_training_mode(True)
         # Update optimizers learning rate
@@ -219,8 +223,12 @@ class SAC(OffPolicyAlgorithm):
                 self.actor.reset_noise()
 
             # Action by the current actor for the sampled state
-            actions_pi, log_prob = self.actor.action_log_prob(replay_data.observations)
-            log_prob = log_prob.reshape(-1, 1)
+            new_anchor_offsets, new_log_prob = self.actor.action_log_prob(replay_data.observations)  # (B, N, 7), (B, N)
+            new_anchor = replay_data.observations.transpose(1, 2) # (B, N, 3)
+            new_action = th.cat((new_anchor, new_anchor_offsets), dim=2) # (B, N, 10)
+            new_q_values = th.cat(self.critic_target(replay_data.observations, new_action), dim=2)
+            new_q_values = th.min(new_q_values, dim=2).values # (B, N)
+            new_location_distribution = th.nn.functional.softmax(new_q_values/self.location_temperature, dim=1) # (B, N)
 
             ent_coef_loss = None
             if self.ent_coef_optimizer is not None and self.log_ent_coef is not None:
@@ -228,7 +236,7 @@ class SAC(OffPolicyAlgorithm):
                 # so we don't change it with other losses
                 # see https://github.com/rail-berkeley/softlearning/issues/60
                 ent_coef = th.exp(self.log_ent_coef.detach())
-                ent_coef_loss = -(self.log_ent_coef * (log_prob + self.target_entropy).detach()).mean()
+                ent_coef_loss = -(self.log_ent_coef * (th.sum(new_location_distribution * (new_log_prob + self.target_entropy), dim=1)).detach()).mean()
                 ent_coef_losses.append(ent_coef_loss.item())
             else:
                 ent_coef = self.ent_coef_tensor
@@ -244,21 +252,36 @@ class SAC(OffPolicyAlgorithm):
 
             with th.no_grad():
                 # Select action according to policy
-                next_actions, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)
+                next_anchor_offsets, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)  # (B, N, 7) (B, N, 1)
+                next_anchor = replay_data.next_observations.transpose(1, 2)
+                next_actions = th.cat((next_anchor, next_anchor_offsets), dim=2) # (B, N, 10)
                 # Compute the next Q values: min over all critics targets
-                next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=1)
-                next_q_values, _ = th.min(next_q_values, dim=1, keepdim=True)
+                next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=2)
+                next_q_values = th.min(next_q_values, dim=2).values # (B, N)
+                next_location_distribution = th.nn.functional.softmax(next_q_values/self.location_temperature, dim=1) # (B, N)
+
                 # add entropy term
-                next_q_values = next_q_values - ent_coef * next_log_prob.reshape(-1, 1)
+                next_q_values = next_q_values - ent_coef * next_log_prob # (B, N)
+                next_q_values = th.sum(next_location_distribution * next_q_values, dim=1, keepdim=True) # (B, 1)
+
                 # td error + entropy term
-                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values
+                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values # (B, 1)
 
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
-            current_q_values = self.critic(replay_data.observations, replay_data.actions)
-
+            current_actions = replay_data.actions # (B, 10)
+            current_actions = th.unsqueeze(current_actions, dim=1)
+            current_actions = current_actions.expand(current_actions.shape[0], replay_data.observations.shape[2], current_actions.shape[2])
+            current_q_values = self.critic(replay_data.observations, current_actions) # 2 *（B, N, 1)
+            
             # Compute critic loss
-            critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
+            point_cloud = replay_data.observations.transpose(1, 2) # (B, N, 3)
+            current_point = replay_data.actions[:, :3] # (B, 3)
+            current_point = current_point.unsqueeze(1) # (B, 1, 3)
+            distances = th.norm(point_cloud-current_point, dim=2) # (B, N)
+            action_index = th.argmin(distances, dim=1, keepdim=True) # (B, 1)
+            action_index = action_index.unsqueeze(-1).expand(-1, -1, 1)
+            critic_loss = 0.5 * sum(F.mse_loss(th.gather(current_q, 1, action_index).squeeze(1), target_q_values) for current_q in current_q_values)
             assert isinstance(critic_loss, th.Tensor)  # for type checker
             critic_losses.append(critic_loss.item())  # type: ignore[union-attr]
 
@@ -270,9 +293,10 @@ class SAC(OffPolicyAlgorithm):
             # Compute actor loss
             # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
             # Min over all critic networks
-            q_values_pi = th.cat(self.critic(replay_data.observations, actions_pi), dim=1)
-            min_qf_pi, _ = th.min(q_values_pi, dim=1, keepdim=True)
-            actor_loss = (ent_coef * log_prob - min_qf_pi).mean()
+            
+            new_q_values = ent_coef * new_log_prob - new_q_values # (B, N)
+            new_q_values = th.sum(new_location_distribution * new_q_values, dim=1, keepdim=True) # (B, 1)
+            actor_loss = th.mean(new_q_values)
             actor_losses.append(actor_loss.item())
 
             # Optimize the actor
@@ -295,15 +319,13 @@ class SAC(OffPolicyAlgorithm):
         if len(ent_coef_losses) > 0:
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))
 
-    def learn(
-        self: SelfSAC,
-        total_timesteps: int,
-        callback: MaybeCallback = None,
-        log_interval: int = 4,
-        tb_log_name: str = "SAC",
-        reset_num_timesteps: bool = True,
-        progress_bar: bool = False,
-    ) -> SelfSAC:
+    
+    def learn(self, total_timesteps, callback=None, log_interval=4, 
+              tb_log_name="SAC", reset_num_timesteps=True, progress_bar=False):
+        
+        ''' interact with env, collect data
+        '''
+
         return super().learn(
             total_timesteps=total_timesteps,
             callback=callback,
@@ -313,9 +335,11 @@ class SAC(OffPolicyAlgorithm):
             progress_bar=progress_bar,
         )
 
+    
     def _excluded_save_params(self) -> List[str]:
         return super()._excluded_save_params() + ["actor", "critic", "critic_target"]  # noqa: RUF005
 
+    
     def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
         state_dicts = ["policy", "actor.optimizer", "critic.optimizer"]
         if self.ent_coef_optimizer is not None:

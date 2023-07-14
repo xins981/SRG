@@ -2,10 +2,9 @@ import math
 from collections import namedtuple
 import pybullet as p
 import trimesh, copy
-from transformations import *
+import transformations as tf
 import numpy as np
 from autolab_core import RigidTransform
-import utils
 
 
 
@@ -165,38 +164,38 @@ class UR5Robotiq85(RobotBase):
 
 class Gripper:
 
-    def __init__(self, sim, bullet_utils):
+    def __init__(self, simulator, pybullet_utils):
 
         gripper_dir = 'resources/robot/urdf/robotiq_hande'
         
-        self._sim = sim
-        self._bullet_utils = bullet_utils
+        self.sim = simulator
+        self.pb_utils = pybullet_utils
         self.rest_pose = np.eye(4)
 
         finger_mesh1 = trimesh.load(f'{gripper_dir}/finger1.obj')
         finger_mesh2 = copy.deepcopy(finger_mesh1)
-        R_z = utils.euler_matrix(0,0,np.pi,axes='sxyz')
+        R_z = tf.euler_matrix(0,0,np.pi,axes='sxyz')
         finger_mesh2.apply_transform(R_z)
         self.finger_meshes = [finger_mesh1, finger_mesh2]
 
-        self.id = self._sim.loadURDF(f"{gripper_dir}/gripper.urdf", [0, 0, 0], useFixedBase=True)
+        self.id = self.sim.loadURDF(fileName=f"{gripper_dir}/gripper.urdf", basePosition=[0, 0, 0], 
+                                     baseOrientation=[0, 0, 0, 1], useFixedBase=True)
         # self.print_joint_info()
         self.finger_ids = np.array([1,2],dtype=int)
         self.gripper_max_force = np.ones(2, dtype=float) * 100
         self.grip_dirs = np.array([[0,1,0],[0,-1,0]])
-        self._sim.changeDynamics(self.id, -1, lateralFriction=0.9, spinningFriction=0.9)
+        self.sim.changeDynamics(self.id, -1, lateralFriction=0.9, spinningFriction=0.9)
         
-        T_gripper_grasp = RigidTransform.load(f'{gripper_dir}/T_grasp_gripper.tf')
-        if T_gripper_grasp._from_frame=='gripper' and T_gripper_grasp._to_frame=='grasp':
+        _gripper_in_grasp = RigidTransform.load(f'{gripper_dir}/T_grasp_gripper.tf')
+        if _gripper_in_grasp._from_frame=='gripper' and _gripper_in_grasp._to_frame=='grasp':
             pass
-        elif T_gripper_grasp._from_frame=='grasp' and T_gripper_grasp._to_frame=='gripper':
-            T_gripper_grasp = T_gripper_grasp.inverse()
+        elif _gripper_in_grasp._from_frame=='grasp' and _gripper_in_grasp._to_frame=='gripper':
+            _gripper_in_grasp = _gripper_in_grasp.inverse()
         else:
-            raise RuntimeError("gripper_in_grasp from={}, to={}".format(gripper_in_grasp._from_frame, gripper_in_grasp._to_frame))
-        gripper_in_grasp = np.eye(4)
-        gripper_in_grasp[:3,:3] = T_gripper_grasp.rotation
-        gripper_in_grasp[:3,3] = T_gripper_grasp.translation
-        self.grasp_in_gripper = np.linalg.inv(gripper_in_grasp)
+            raise RuntimeError("gripper_in_grasp from={}, to={}".format(_gripper_in_grasp._from_frame, _gripper_in_grasp._to_frame))
+        self.gripper_in_grasp = np.eye(4)
+        self.gripper_in_grasp[:3,:3] = _gripper_in_grasp.rotation
+        self.gripper_in_grasp[:3,3] = _gripper_in_grasp.translation
 
 
     def open(self):
@@ -204,15 +203,19 @@ class Gripper:
 
 
     def close(self):
-        self._move_finger(target_positions=[1, 1], step=50)
+        self._move_finger(target_positions=[1, 1], step=50, delay=1/10.)
 
 
-    def _move_finger(self, target_positions, step):
+    def _move_finger(self, target_positions, step, delay=None):
         
-        self._sim.setJointMotorControlArray(self.id,jointIndices=self.finger_ids,controlMode=p.POSITION_CONTROL,
+        self.sim.setJointMotorControlArray(self.id,jointIndices=self.finger_ids,controlMode=p.POSITION_CONTROL,
                                             targetPositions=target_positions,forces=self.gripper_max_force)
-        for _ in range(step):
-            self.step_simulation()
+        if delay != None:
+            for _ in range(step):
+                self.step_simulation(delay=delay)
+        else:
+            for _ in range(step):
+                self.step_simulation()
     
 
     def step_simulation(self):
@@ -221,7 +224,7 @@ class Gripper:
 
     def reset(self):
         
-        self._bullet_utils.set_body_pose_in_world(self.id, self.rest_pose)
+        self.pb_utils.set_body_pose_in_world(self.id, self.rest_pose)
         self.open()
 
 
@@ -234,12 +237,12 @@ class Gripper:
 
     
     def print_joint_info(self):
-        joint_num = p.getNumJoints(self.id)
+        joint_num = self.sim.getNumJoints(self.id)
         print("gripper 的节点数量为: ", joint_num)
 
         print("gripper 的信息: ")
         for joint_index in range(joint_num):
-            info_tuple = p.getJointInfo(self.id, joint_index)
+            info_tuple = self.sim.getJointInfo(self.id, joint_index)
             print(f"关节序号：{info_tuple[0]}\n\
                     关节名称：{info_tuple[1]}\n\
                     关节类型：{info_tuple[2]}\n\
@@ -257,3 +260,6 @@ class Gripper:
                     父节点frame的关节位置: {info_tuple[14]}\n\
                     父节点frame的关节方向: {info_tuple[15]}\n\
                     父节点的索引，若是基座返回-1: {info_tuple[16]}\n\n")
+            
+
+    

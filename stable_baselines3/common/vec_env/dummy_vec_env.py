@@ -39,7 +39,7 @@ class DummyVecEnv(VecEnv):
                 "Please read https://github.com/DLR-RM/stable-baselines3/issues/1151 for more information."
             )
         env = self.envs[0]
-        super().__init__(len(env_fns), env.observation_space, env.action_space)
+        VecEnv.__init__(self, len(env_fns), env.observation_space, env.action_space, env.render_mode)
         obs_space = env.observation_space
         self.keys, shapes, dtypes = obs_space_info(obs_space)
 
@@ -55,9 +55,7 @@ class DummyVecEnv(VecEnv):
     def step_wait(self) -> VecEnvStepReturn:
         # Avoid circular imports
         for env_idx in range(self.num_envs):
-            obs, self.buf_rews[env_idx], terminated, truncated, self.buf_infos[env_idx] = self.envs[env_idx].step(
-                self.actions[env_idx]
-            )
+            obs, self.buf_rews[env_idx], terminated, truncated, self.buf_infos[env_idx] = self.envs[env_idx].step(self.actions[env_idx])
             # convert to SB3 VecEnv api
             self.buf_dones[env_idx] = terminated or truncated
             # See https://github.com/openai/gym/issues/3102

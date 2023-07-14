@@ -25,8 +25,8 @@ SelfOffPolicyAlgorithm = TypeVar("SelfOffPolicyAlgorithm", bound="OffPolicyAlgor
 
 
 class OffPolicyAlgorithm(BaseAlgorithm):
-    """
-    The base for Off-Policy algorithms (ex: SAC/TD3)
+    
+    """ The base for Off-Policy algorithms (ex: SAC/TD3)
 
     :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
     :param env: The environment to learn from
@@ -145,6 +145,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         # For gSDE only
         self.use_sde_at_warmup = use_sde_at_warmup
 
+
     def _convert_train_freq(self) -> None:
         """
         Convert `train_freq` parameter (int or tuple)
@@ -168,6 +169,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 raise ValueError(f"The frequency of `train_freq` must be an integer and not {train_freq[0]}")
 
             self.train_freq = TrainFreq(*train_freq)
+
 
     def _setup_model(self) -> None:
         self._setup_lr_schedule()
@@ -196,16 +198,12 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 **replay_buffer_kwargs,  # pytype:disable=wrong-keyword-args
             )
 
-        self.policy = self.policy_class(  # pytype:disable=not-instantiable
-            self.observation_space,
-            self.action_space,
-            self.lr_schedule,
-            **self.policy_kwargs,  # pytype:disable=not-instantiable
-        )
+        self.policy = self.policy_class(self.observation_space, self.action_space, self.lr_schedule, **self.policy_kwargs)
         self.policy = self.policy.to(self.device)
 
         # Convert train freq parameter to TrainFreq object
         self._convert_train_freq()
+
 
     def save_replay_buffer(self, path: Union[str, pathlib.Path, io.BufferedIOBase]) -> None:
         """
@@ -216,6 +214,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         """
         assert self.replay_buffer is not None, "The replay buffer is not defined"
         save_to_pkl(path, self.replay_buffer, self.verbose)
+
 
     def load_replay_buffer(
         self,
@@ -245,6 +244,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             self.replay_buffer.set_env(self.get_env())
             if truncate_last_traj:
                 self.replay_buffer.truncate_last_trajectory()
+
 
     def _setup_learn(
         self,
@@ -288,6 +288,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             tb_log_name,
             progress_bar,
         )
+
 
     def learn(
         self: SelfOffPolicyAlgorithm,
@@ -334,21 +335,19 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
         return self
 
-    def train(self, gradient_steps: int, batch_size: int) -> None:
+
+    def train(self, gradient_steps, batch_size) -> None:
         """
         Sample the replay buffer and do the updates
         (gradient descent and update target networks)
         """
         raise NotImplementedError()
 
-    def _sample_action(
-        self,
-        learning_starts: int,
-        action_noise: Optional[ActionNoise] = None,
-        n_envs: int = 1,
-    ) -> Tuple[np.ndarray, np.ndarray]:
-        """
-        Sample an action according to the exploration policy.
+
+    def _sample_action(self, learning_starts, action_noise=None, n_envs=1):
+        
+        """ Sample an action according to the exploration policy.
+        
         This is either done by sampling the probability distribution of the policy,
         or sampling a random action (from a uniform distribution over the action space)
         or by adding noise to the deterministic output.
@@ -362,15 +361,24 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             and scaled action that will be stored in the replay buffer.
             The two differs when the action space is not normalized (bounds are not [-1, 1]).
         """
+        
         # Select action randomly or according to policy
         if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup):
             # Warmup phase
-            unscaled_action = np.array([self.action_space.sample() for _ in range(n_envs)])
+            unscaled_action = []
+            for i in range(n_envs):
+                action_point_ind = np.random.randint(0, self.observation_space.shape[2])
+                action_point = self._last_obs[i, :, action_point_ind]
+                action_off = self.action_space.sample()
+                action_off = action_off[3:] # drop random anchor coordinates
+                action_param = np.concatenate((action_point, action_off))
+                unscaled_action.append(action_param)
+            unscaled_action = np.array(unscaled_action)
         else:
             # Note: when using continuous actions,
             # we assume that the policy uses tanh to scale the action
             # We use non-deterministic action in the case of SAC, for TD3, it does not matter
-            unscaled_action, _ = self.predict(self._last_obs, deterministic=False)
+            unscaled_action, _ = self.predict(self._last_obs, deterministic=False) # （B, N, 7)
 
         # Rescale the action from [low, high] to [-1, 1]
         if isinstance(self.action_space, spaces.Box):
@@ -387,7 +395,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             # Discrete case, no need to normalize or clip
             buffer_action = unscaled_action
             action = buffer_action
+        
         return action, buffer_action
+
 
     def _dump_logs(self) -> None:
         """
@@ -410,6 +420,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         # Pass the number of timesteps for tensorboard
         self.logger.dump(step=self.num_timesteps)
 
+
     def _on_step(self) -> None:
         """
         Method called after each step in the environment.
@@ -417,6 +428,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         but can be used for other purposes
         """
         pass
+
 
     def _store_transition(
         self,
@@ -483,6 +495,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         if self._vec_normalize_env is not None:
             self._last_original_obs = new_obs_
 
+
     def collect_rollouts(
         self,
         env: VecEnv,
@@ -538,7 +551,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 self.actor.reset_noise(env.num_envs)
 
             # Select action randomly or according to policy
-            actions, buffer_actions = self._sample_action(learning_starts, action_noise, env.num_envs)
+            # actions: [low, high]; buffer_actions: scale [-1, 1];
+            actions, buffer_actions = self._sample_action(learning_starts, action_noise, env.num_envs) # (B, 10)
 
             # Rescale and perform action
             new_obs, rewards, dones, infos = env.step(actions)

@@ -37,8 +37,9 @@ SelfBaseModel = TypeVar("SelfBaseModel", bound="BaseModel")
 
 
 class BaseModel(nn.Module):
-    """
-    The base model object: makes predictions in response to observations.
+    
+    """ The base model object: makes predictions in response to observations.
+    
 
     In the case of policies, the prediction is an action. In the case of critics, it is the
     estimated value of the observation.
@@ -93,13 +94,14 @@ class BaseModel(nn.Module):
         if normalize_images is False and issubclass(features_extractor_class, (NatureCNN, CombinedExtractor)):
             self.features_extractor_kwargs.update(dict(normalized_image=True))
 
+
     def _update_features_extractor(
         self,
         net_kwargs: Dict[str, Any],
         features_extractor: Optional[BaseFeaturesExtractor] = None,
     ) -> Dict[str, Any]:
-        """
-        Update the network keyword arguments and create a new features extractor object if needed.
+        
+        """ Update the network keyword arguments and create a new features extractor object if needed.
         If a ``features_extractor`` object is passed, then it will be shared.
 
         :param net_kwargs: the base network keyword arguments, without the ones
@@ -108,6 +110,7 @@ class BaseModel(nn.Module):
             If None, a new object will be created.
         :return: The updated keyword arguments
         """
+        
         net_kwargs = net_kwargs.copy()
         if features_extractor is None:
             # The features extractor is not shared, create a new one
@@ -115,9 +118,11 @@ class BaseModel(nn.Module):
         net_kwargs.update(dict(features_extractor=features_extractor, features_dim=features_extractor.features_dim))
         return net_kwargs
 
+
     def make_features_extractor(self) -> BaseFeaturesExtractor:
         """Helper method to create a features extractor."""
         return self.features_extractor_class(self.observation_space, **self.features_extractor_kwargs)
+
 
     def extract_features(self, obs: th.Tensor, features_extractor: BaseFeaturesExtractor) -> th.Tensor:
         """
@@ -129,6 +134,7 @@ class BaseModel(nn.Module):
         """
         preprocessed_obs = preprocess_obs(obs, self.observation_space, normalize_images=self.normalize_images)
         return features_extractor(preprocessed_obs)
+
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         """
@@ -154,6 +160,7 @@ class BaseModel(nn.Module):
         for param in self.parameters():
             return param.device
         return get_device("cpu")
+
 
     def save(self, path: str) -> None:
         """
@@ -182,6 +189,7 @@ class BaseModel(nn.Module):
         model.to(device)
         return model
 
+
     def load_from_vector(self, vector: np.ndarray) -> None:
         """
         Load parameters from a 1D vector.
@@ -190,6 +198,7 @@ class BaseModel(nn.Module):
         """
         th.nn.utils.vector_to_parameters(th.as_tensor(vector, dtype=th.float, device=self.device), self.parameters())
 
+
     def parameters_to_vector(self) -> np.ndarray:
         """
         Convert the parameters to a 1D vector.
@@ -197,6 +206,7 @@ class BaseModel(nn.Module):
         :return:
         """
         return th.nn.utils.parameters_to_vector(self.parameters()).detach().cpu().numpy()
+
 
     def set_training_mode(self, mode: bool) -> None:
         """
@@ -207,6 +217,7 @@ class BaseModel(nn.Module):
         :param mode: if true, set to training mode, else set to evaluation mode
         """
         self.train(mode)
+
 
     def is_vectorized_observation(self, observation: Union[np.ndarray, Dict[str, np.ndarray]]) -> bool:
         """
@@ -227,6 +238,7 @@ class BaseModel(nn.Module):
                 maybe_transpose(observation, self.observation_space), self.observation_space
             )
         return vectorized_env
+
 
     def obs_to_tensor(self, observation: Union[np.ndarray, Dict[str, np.ndarray]]) -> Tuple[th.Tensor, bool]:
         """
@@ -286,16 +298,19 @@ class BasePolicy(BaseModel, ABC):
         super().__init__(*args, **kwargs)
         self._squash_output = squash_output
 
+
     @staticmethod
     def _dummy_schedule(progress_remaining: float) -> float:
         """(float) Useful for pickling policy."""
         del progress_remaining
         return 0.0
 
+
     @property
     def squash_output(self) -> bool:
         """(bool) Getter for squash_output."""
         return self._squash_output
+
 
     @staticmethod
     def init_weights(module: nn.Module, gain: float = 1) -> None:
@@ -306,6 +321,7 @@ class BasePolicy(BaseModel, ABC):
             nn.init.orthogonal_(module.weight, gain=gain)
             if module.bias is not None:
                 module.bias.data.fill_(0.0)
+
 
     @abstractmethod
     def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
@@ -320,15 +336,10 @@ class BasePolicy(BaseModel, ABC):
         :return: Taken action according to the policy
         """
 
-    def predict(
-        self,
-        observation: Union[np.ndarray, Dict[str, np.ndarray]],
-        state: Optional[Tuple[np.ndarray, ...]] = None,
-        episode_start: Optional[np.ndarray] = None,
-        deterministic: bool = False,
-    ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
-        """
-        Get the policy action from an observation (and optional hidden state).
+
+    def predict(self, observation, state=None, episode_start=None, deterministic=False):
+        
+        """ Get the policy action from an observation (and optional hidden state).
         Includes sugar-coating to handle different observations (e.g. normalizing images).
 
         :param observation: the input observation
@@ -348,43 +359,56 @@ class BasePolicy(BaseModel, ABC):
         with th.no_grad():
             actions = self._predict(observation, deterministic=deterministic)
         # Convert to numpy, and reshape to the original action shape
-        actions = actions.cpu().numpy().reshape((-1, *self.action_space.shape))
+        actions = actions.cpu().numpy().reshape((-1, *self.action_space.shape)) # (B, 10)
 
         if isinstance(self.action_space, spaces.Box):
             if self.squash_output:
-                # Rescale to proper domain when using squashing
+                # Rescale to proper domain when using squashing. the actions from squash(tanh layer) are normalized (-1, 1)
                 actions = self.unscale_action(actions)
             else:
                 # Actions could be on arbitrary scale, so clip the actions to avoid
                 # out of bound error (e.g. if sampling from a Gaussian distribution)
-                actions = np.clip(actions, self.action_space.low, self.action_space.high)
+                anchor_offsets = actions[:,3:]
+                cliped_anchor_offsets = np.clip(anchor_offsets, self.action_space.low[3:], self.action_space.high[3:])
+                actions[:,3:] = cliped_anchor_offsets
 
         # Remove batch dimension if needed
         if not vectorized_env:
             actions = actions.squeeze(axis=0)
-
         return actions, state
 
+
     def scale_action(self, action: np.ndarray) -> np.ndarray:
-        """
-        Rescale the action from [low, high] to [-1, 1]
+        
+        """ Rescale the action from [low, high] to [-1, 1]
         (no need for symmetric action space)
 
         :param action: Action to scale
         :return: Scaled action
         """
-        low, high = self.action_space.low, self.action_space.high
-        return 2.0 * ((action - low) / (high - low)) - 1.0
+
+        anchor = action[:,:3]
+        offsets = action[:,3:]
+        low, high = self.action_space.low[3:], self.action_space.high[3:]
+        scaled_offsets = 2.0 * ((offsets - low) / (high - low)) - 1.0
+        scaled_actions = np.concatenate((anchor,scaled_offsets), axis=1)
+        return scaled_actions
+
 
     def unscale_action(self, scaled_action: np.ndarray) -> np.ndarray:
-        """
-        Rescale the action from [-1, 1] to [low, high]
+        
+        """ Rescale the action from [-1, 1] to [low, high]
         (no need for symmetric action space)
 
         :param scaled_action: Action to un-scale
         """
-        low, high = self.action_space.low, self.action_space.high
-        return low + (0.5 * (scaled_action + 1.0) * (high - low))
+        
+        anchor = scaled_action[:,:3]
+        offsets = scaled_action[:,3:]
+        low, high = self.action_space.low[3:], self.action_space.high[3:]
+        unscaled_offsets = low + (0.5 * (offsets + 1.0) * (high - low))
+        unscaled_actions = np.concatenate((anchor,unscaled_offsets), axis=1)
+        return unscaled_actions
 
 
 class ActorCriticPolicy(BasePolicy):
@@ -872,8 +896,8 @@ class MultiInputActorCriticPolicy(ActorCriticPolicy):
 
 
 class ContinuousCritic(BaseModel):
-    """
-    Critic network(s) for DDPG/SAC/TD3.
+    
+    """  Critic network(s) for DDPG/SAC/TD3.
     It represents the action-state value function (Q-value function).
     Compared to A2C/PPO critics, this one represents the Q-value
     and takes the continuous action as input. It is concatenated with the state
@@ -897,7 +921,7 @@ class ContinuousCritic(BaseModel):
     :param share_features_extractor: Whether the features extractor is shared or not
         between the actor and the critic (this saves computation time)
     """
-
+    
     def __init__(
         self,
         observation_space: spaces.Space,
@@ -928,13 +952,16 @@ class ContinuousCritic(BaseModel):
             self.add_module(f"qf{idx}", q_net)
             self.q_networks.append(q_net)
 
-    def forward(self, obs: th.Tensor, actions: th.Tensor) -> Tuple[th.Tensor, ...]:
+
+    def forward(self, obs, actions):
         # Learn the features extractor using the policy loss only
         # when the features_extractor is shared with the actor
         with th.set_grad_enabled(not self.share_features_extractor):
-            features = self.extract_features(obs, self.features_extractor)
-        qvalue_input = th.cat([features, actions], dim=1)
-        return tuple(q_net(qvalue_input) for q_net in self.q_networks)
+            features = self.extract_features(obs, self.features_extractor) # (B, 1088, N)
+        features = features.transpose(1, 2) # (B, N, 1088)
+        qvalue_input = th.cat([features, actions], dim=2) # (B, N, 1098)
+        return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, N, 1)
+
 
     def q1_forward(self, obs: th.Tensor, actions: th.Tensor) -> th.Tensor:
         """
@@ -944,4 +971,6 @@ class ContinuousCritic(BaseModel):
         """
         with th.no_grad():
             features = self.extract_features(obs, self.features_extractor)
-        return self.q_networks[0](th.cat([features, actions], dim=1))
+        features = features.transpose(1, 2) # (B, N, 1088)
+        qvalue_input = th.cat([features, actions], dim=2) # (B, N, 1095)
+        return self.q_networks[0](qvalue_input)

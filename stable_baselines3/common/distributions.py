@@ -23,6 +23,7 @@ SelfStateDependentNoiseDistribution = TypeVar("SelfStateDependentNoiseDistributi
 
 
 class Distribution(ABC):
+    
     """Abstract base class for distributions."""
 
     def __init__(self):
@@ -108,24 +109,25 @@ class Distribution(ABC):
 
 
 def sum_independent_dims(tensor: th.Tensor) -> th.Tensor:
-    """
-    Continuous actions are usually considered to be independent,
+    
+    """ Continuous actions are usually considered to be independent,
     so we can sum components of the ``log_prob`` or the entropy.
 
     :param tensor: shape: (n_batch, n_actions) or (n_batch,)
     :return: shape: (n_batch,)
     """
-    if len(tensor.shape) > 1:
-        tensor = tensor.sum(dim=1)
+
+    if len(tensor.shape) > 2:
+        tensor = tensor.sum(dim=2)
     else:
         tensor = tensor.sum()
     return tensor
 
 
 class DiagGaussianDistribution(Distribution):
-    """
-    Gaussian distribution with diagonal covariance matrix, for continuous actions.
-
+    
+    """ Gaussian distribution with diagonal covariance matrix, for continuous actions.
+    
     :param action_dim:  Dimension of the action space.
     """
 
@@ -150,17 +152,16 @@ class DiagGaussianDistribution(Distribution):
         log_std = nn.Parameter(th.ones(self.action_dim) * log_std_init, requires_grad=True)
         return mean_actions, log_std
 
-    def proba_distribution(
-        self: SelfDiagGaussianDistribution, mean_actions: th.Tensor, log_std: th.Tensor
-    ) -> SelfDiagGaussianDistribution:
-        """
-        Create the distribution given its parameters (mean, std)
+    def proba_distribution(self: SelfDiagGaussianDistribution, mean_actions: th.Tensor, log_std: th.Tensor) -> SelfDiagGaussianDistribution:
+        
+        """ Create the distribution given its parameters (mean, std)
 
         :param mean_actions:
         :param log_std:
         :return:
         """
-        action_std = th.ones_like(mean_actions) * log_std.exp()
+        
+        action_std = th.ones_like(mean_actions) * log_std.exp() # (B, N, 7)
         self.distribution = Normal(mean_actions, action_std)
         return self
 
@@ -186,28 +187,30 @@ class DiagGaussianDistribution(Distribution):
         return self.distribution.mean
 
     def actions_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor, deterministic: bool = False) -> th.Tensor:
+        
         # Update the proba distribution
         self.proba_distribution(mean_actions, log_std)
         return self.get_actions(deterministic=deterministic)
 
     def log_prob_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
-        """
-        Compute the log probability of taking an action
+        
+        """ Compute the log probability of taking an action
         given the distribution parameters.
 
         :param mean_actions:
         :param log_std:
         :return:
         """
+        
         actions = self.actions_from_params(mean_actions, log_std)
         log_prob = self.log_prob(actions)
         return actions, log_prob
 
 
 class SquashedDiagGaussianDistribution(DiagGaussianDistribution):
-    """
-    Gaussian distribution with diagonal covariance matrix, followed by a squashing function (tanh) to ensure bounds.
-
+    
+    """ Gaussian distribution with diagonal covariance matrix, followed by a squashing function (tanh) to ensure bounds.
+    
     :param action_dim: Dimension of the action space.
     :param epsilon: small value to avoid NaN due to numerical imprecision.
     """
@@ -225,6 +228,7 @@ class SquashedDiagGaussianDistribution(DiagGaussianDistribution):
         return self
 
     def log_prob(self, actions: th.Tensor, gaussian_actions: Optional[th.Tensor] = None) -> th.Tensor:
+        
         # Inverse tanh
         # Naive implementation (not stable): 0.5 * torch.log((1 + x) / (1 - x))
         # We use numpy to avoid numerical instability
@@ -233,10 +237,10 @@ class SquashedDiagGaussianDistribution(DiagGaussianDistribution):
             gaussian_actions = TanhBijector.inverse(actions)
 
         # Log likelihood for a Gaussian distribution
-        log_prob = super().log_prob(gaussian_actions)
+        log_prob = super().log_prob(gaussian_actions) # (B, N, 1)
         # Squash correction (from original SAC implementation)
         # this comes from the fact that tanh is bijective and differentiable
-        log_prob -= th.sum(th.log(1 - actions**2 + self.epsilon), dim=1)
+        log_prob -= th.sum(th.log(1 - actions**2 + self.epsilon), dim=2) # (B, N, 1)
         return log_prob
 
     def entropy(self) -> Optional[th.Tensor]:
@@ -255,7 +259,7 @@ class SquashedDiagGaussianDistribution(DiagGaussianDistribution):
         return th.tanh(self.gaussian_actions)
 
     def log_prob_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
-        action = self.actions_from_params(mean_actions, log_std)
+        action = self.actions_from_params(mean_actions, log_std) # (B, N, 7)
         log_prob = self.log_prob(action, self.gaussian_actions)
         return action, log_prob
 

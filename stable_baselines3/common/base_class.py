@@ -64,9 +64,8 @@ def maybe_make_env(env: Union[GymEnv, str], verbose: int) -> GymEnv:
 
 
 class BaseAlgorithm(ABC):
-    """
-    The base of RL algorithms
-
+    
+    """ The base of RL algorithms
     :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
     :param env: The environment to learn from
                 (if registered in Gym, can be str. Can be None for loading trained models)
@@ -195,9 +194,8 @@ class BaseAlgorithm(ABC):
                 raise ValueError("generalized State-Dependent Exploration (gSDE) can only be used with continuous actions.")
 
             if isinstance(self.action_space, spaces.Box):
-                assert np.all(
-                    np.isfinite(np.array([self.action_space.low, self.action_space.high]))
-                ), "Continuous action space must have a finite lower and upper bound"
+                assert np.all(np.isfinite(np.array([self.action_space.low[3:], self.action_space.high[3:]]))), "Continuous action space must have a finite lower and upper bound"
+
 
     @staticmethod
     def _wrap_env(env: GymEnv, verbose: int = 0, monitor_wrapper: bool = True) -> VecEnv:
@@ -247,9 +245,11 @@ class BaseAlgorithm(ABC):
 
         return env
 
+
     @abstractmethod
     def _setup_model(self) -> None:
         """Create networks, buffer and optimizers."""
+
 
     def set_logger(self, logger: Logger) -> None:
         """
@@ -265,14 +265,17 @@ class BaseAlgorithm(ABC):
         # User defined logger
         self._custom_logger = True
 
+
     @property
     def logger(self) -> Logger:
         """Getter for the logger object."""
         return self._logger
 
+
     def _setup_lr_schedule(self) -> None:
         """Transform to callable if needed."""
         self.lr_schedule = get_schedule_fn(self.learning_rate)
+
 
     def _update_current_progress_remaining(self, num_timesteps: int, total_timesteps: int) -> None:
         """
@@ -282,6 +285,7 @@ class BaseAlgorithm(ABC):
         :param total_timesteps:
         """
         self._current_progress_remaining = 1.0 - float(num_timesteps) / float(total_timesteps)
+
 
     def _update_learning_rate(self, optimizers: Union[List[th.optim.Optimizer], th.optim.Optimizer]) -> None:
         """
@@ -298,6 +302,7 @@ class BaseAlgorithm(ABC):
             optimizers = [optimizers]
         for optimizer in optimizers:
             update_learning_rate(optimizer, self.lr_schedule(self._current_progress_remaining))
+
 
     def _excluded_save_params(self) -> List[str]:
         """
@@ -320,6 +325,7 @@ class BaseAlgorithm(ABC):
             "_custom_logger",
         ]
 
+
     def _get_policy_from_name(self, policy_name: str) -> Type[BasePolicy]:
         """
         Get a policy class from its name representation.
@@ -336,6 +342,7 @@ class BaseAlgorithm(ABC):
             return self.policy_aliases[policy_name]
         else:
             raise ValueError(f"Policy {policy_name} unknown")
+
 
     def _get_torch_save_params(self) -> Tuple[List[str], List[str]]:
         """
@@ -354,6 +361,7 @@ class BaseAlgorithm(ABC):
         state_dicts = ["policy"]
 
         return state_dicts, []
+
 
     def _init_callback(
         self,
@@ -379,6 +387,7 @@ class BaseAlgorithm(ABC):
 
         callback.init_callback(self)
         return callback
+
 
     def _setup_learn(
         self,
@@ -437,6 +446,7 @@ class BaseAlgorithm(ABC):
 
         return total_timesteps, callback
 
+
     def _update_info_buffer(self, infos: List[Dict[str, Any]], dones: Optional[np.ndarray] = None) -> None:
         """
         Retrieve reward, episode length, episode success and update the buffer
@@ -458,6 +468,7 @@ class BaseAlgorithm(ABC):
             if maybe_is_success is not None and dones[idx]:
                 self.ep_success_buffer.append(maybe_is_success)
 
+
     def get_env(self) -> Optional[VecEnv]:
         """
         Returns the current environment (can be None if not defined).
@@ -465,6 +476,7 @@ class BaseAlgorithm(ABC):
         :return: The current environment
         """
         return self.env
+
 
     def get_vec_normalize_env(self) -> Optional[VecNormalize]:
         """
@@ -474,6 +486,7 @@ class BaseAlgorithm(ABC):
         :return: The ``VecNormalize`` env.
         """
         return self._vec_normalize_env
+
 
     def set_env(self, env: GymEnv, force_reset: bool = True) -> None:
         """
@@ -510,6 +523,7 @@ class BaseAlgorithm(ABC):
         self.n_envs = env.num_envs
         self.env = env
 
+
     @abstractmethod
     def learn(
         self: SelfBaseAlgorithm,
@@ -532,6 +546,7 @@ class BaseAlgorithm(ABC):
         :return: the trained model
         """
 
+
     def predict(
         self,
         observation: Union[np.ndarray, Dict[str, np.ndarray]],
@@ -539,8 +554,8 @@ class BaseAlgorithm(ABC):
         episode_start: Optional[np.ndarray] = None,
         deterministic: bool = False,
     ) -> Tuple[np.ndarray, Optional[Tuple[np.ndarray, ...]]]:
-        """
-        Get the policy action from an observation (and optional hidden state).
+        
+        """ Get the policy action from an observation (and optional hidden state).
         Includes sugar-coating to handle different observations (e.g. normalizing images).
 
         :param observation: the input observation
@@ -552,7 +567,9 @@ class BaseAlgorithm(ABC):
         :return: the model's action and the next hidden state
             (used in recurrent policies)
         """
+        
         return self.policy.predict(observation, state, episode_start, deterministic)
+
 
     def set_random_seed(self, seed: Optional[int] = None) -> None:
         """
@@ -568,6 +585,7 @@ class BaseAlgorithm(ABC):
         # self.env is always a VecEnv
         if self.env is not None:
             self.env.seed(seed)
+
 
     def set_parameters(
         self,
@@ -636,6 +654,7 @@ class BaseAlgorithm(ABC):
                 "Names of parameters do not match agents' parameters: "
                 f"expected {objects_needing_update}, got {updated_objects}"
             )
+
 
     @classmethod
     def load(  # noqa: C901
@@ -779,6 +798,7 @@ class BaseAlgorithm(ABC):
             model.policy.reset_noise()  # type: ignore[operator]  # pytype: disable=attribute-error
         return model
 
+
     def get_parameters(self) -> Dict[str, Dict]:
         """
         Return the parameters of the agent. This includes parameters from different networks, e.g.
@@ -793,6 +813,7 @@ class BaseAlgorithm(ABC):
             # Retrieve state dict
             params[name] = attr.state_dict()
         return params
+
 
     def save(
         self,

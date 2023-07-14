@@ -1,7 +1,4 @@
 import numpy as np
-from transformations import *
-import pybullet as p
-
 
 
 class Camera:
@@ -48,3 +45,5 @@ class Camera:
 
     def getCameraImage(self):
         raise RuntimeError('`getCameraImage` method of Camera Class should be hooked by the environment.')
+        
+    

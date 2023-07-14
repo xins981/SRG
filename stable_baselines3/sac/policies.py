@@ -3,6 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 import torch as th
 from gymnasium import spaces
 from torch import nn
+import numpy as np
 
 from stable_baselines3.common.distributions import SquashedDiagGaussianDistribution, StateDependentNoiseDistribution
 from stable_baselines3.common.policies import BasePolicy, ContinuousCritic
@@ -23,8 +24,8 @@ LOG_STD_MIN = -20
 
 
 class Actor(BasePolicy):
-    """
-    Actor network (policy) for SAC.
+    
+    """ Actor network (policy) for SAC.
 
     :param observation_space: Obervation space
     :param action_space: Action space
@@ -73,16 +74,15 @@ class Actor(BasePolicy):
         # Save arguments to re-create object at loading
         self.use_sde = use_sde
         self.sde_features_extractor = None
-        self.net_arch = net_arch
+        self.net_arch = net_arch # actor middle layers, don't include input and output layer
         self.features_dim = features_dim
         self.activation_fn = activation_fn
         self.log_std_init = log_std_init
         self.use_expln = use_expln
         self.full_std = full_std
         self.clip_mean = clip_mean
-
         action_dim = get_action_dim(self.action_space)
-        latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn)
+        latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn) # 
         self.latent_pi = nn.Sequential(*latent_pi_net)
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else features_dim
 
@@ -98,13 +98,15 @@ class Actor(BasePolicy):
             if clip_mean > 0.0:
                 self.mu = nn.Sequential(self.mu, nn.Hardtanh(min_val=-clip_mean, max_val=clip_mean))
         else:
-            self.action_dist = SquashedDiagGaussianDistribution(action_dim)  # type: ignore[assignment]
-            self.mu = nn.Linear(last_layer_dim, action_dim)
-            self.log_std = nn.Linear(last_layer_dim, action_dim)  # type: ignore[assignment]
+            self.action_dist = SquashedDiagGaussianDistribution(action_dim-3)  # type: ignore[assignment]
+            # actor output layer
+            self.mu = nn.Linear(last_layer_dim, action_dim-3)
+            self.log_std = nn.Linear(last_layer_dim, action_dim-3)  # type: ignore[assignment]
+
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
+        
         data = super()._get_constructor_parameters()
-
         data.update(
             dict(
                 net_arch=self.net_arch,
@@ -120,6 +122,7 @@ class Actor(BasePolicy):
         )
         return data
 
+
     def get_std(self) -> th.Tensor:
         """
         Retrieve the standard deviation of the action distribution.
@@ -134,6 +137,7 @@ class Actor(BasePolicy):
         assert isinstance(self.action_dist, StateDependentNoiseDistribution), msg
         return self.action_dist.get_std(self.log_std)
 
+
     def reset_noise(self, batch_size: int = 1) -> None:
         """
         Sample new weights for the exploration matrix, when using gSDE.
@@ -144,43 +148,57 @@ class Actor(BasePolicy):
         assert isinstance(self.action_dist, StateDependentNoiseDistribution), msg
         self.action_dist.sample_weights(self.log_std, batch_size=batch_size)
 
+    
     def get_action_dist_params(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor, Dict[str, th.Tensor]]:
-        """
-        Get the parameters for the action distribution.
+        
+        """ Get the parameters for the action distribution.
 
         :param obs:
         :return:
             Mean, standard deviation and optional keyword arguments.
         """
-        features = self.extract_features(obs, self.features_extractor)
-        latent_pi = self.latent_pi(features)
-        mean_actions = self.mu(latent_pi)
+        
+        features = self.extract_features(obs, self.features_extractor) # (B, 1088, N)
+        features = features.transpose(1, 2) # (B, N, 1088)
+        latent_pi = self.latent_pi(features) # (B, N, 128)
+        mean_actions = self.mu(latent_pi) # (B, N, 7)
 
         if self.use_sde:
             return mean_actions, self.log_std, dict(latent_sde=latent_pi)
         # Unstructured exploration (Original implementation)
-        log_std = self.log_std(latent_pi)  # type: ignore[operator]
+        log_std = self.log_std(latent_pi)  # (B, N, 7)
         # Original Implementation to cap the standard deviation
         log_std = th.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
         return mean_actions, log_std, {}
 
+    
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
-        mean_actions, log_std, kwargs = self.get_action_dist_params(obs)
+        
+        mean_actions, log_std, kwargs = self.get_action_dist_params(obs) 
         # Note: the action is squashed
-        return self.action_dist.actions_from_params(mean_actions, log_std, deterministic=deterministic, **kwargs)
+        off_params = self.action_dist.actions_from_params(mean_actions, log_std, 
+                                                          deterministic=deterministic, **kwargs) # (B, N, 7)
+        obs = obs.transpose(1, 2) # (B, N ,3)
+        action_params = th.cat((obs, off_params), dim=2) # (B, N, 10)
+        return action_params
 
+    
     def action_log_prob(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
-        mean_actions, log_std, kwargs = self.get_action_dist_params(obs)
-        # return action and associated log prob
-        return self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs)
 
+        mean_actions, log_std, kwargs = self.get_action_dist_params(obs) # (B, N, 7) (B, N, 7)
+        # return action and associated log prob
+        anchor_offsets, log_prob = self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs) # (B, N, 7) (B, N, 1)
+        return anchor_offsets, log_prob
+
+    
     def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
         return self(observation, deterministic)
 
 
+
 class SACPolicy(BasePolicy):
-    """
-    Policy class (with both actor and critic) for SAC.
+    
+    """ Policy class (with both actor and critic) for SAC.
 
     :param observation_space: Observation space
     :param action_space: Action space
@@ -264,6 +282,7 @@ class SACPolicy(BasePolicy):
             "clip_mean": clip_mean,
         }
         self.actor_kwargs.update(sde_kwargs)
+        
         self.critic_kwargs = self.net_args.copy()
         self.critic_kwargs.update(
             {
@@ -277,7 +296,9 @@ class SACPolicy(BasePolicy):
 
         self._build(lr_schedule)
 
+
     def _build(self, lr_schedule: Schedule) -> None:
+        
         self.actor = self.make_actor()
         self.actor.optimizer = self.optimizer_class(
             self.actor.parameters(),
@@ -309,6 +330,7 @@ class SACPolicy(BasePolicy):
         # Target networks should always be in eval mode
         self.critic_target.set_training_mode(False)
 
+
     def _get_constructor_parameters(self) -> Dict[str, Any]:
         data = super()._get_constructor_parameters()
 
@@ -330,6 +352,7 @@ class SACPolicy(BasePolicy):
         )
         return data
 
+
     def reset_noise(self, batch_size: int = 1) -> None:
         """
         Sample new weights for the exploration matrix, when using gSDE.
@@ -338,19 +361,40 @@ class SACPolicy(BasePolicy):
         """
         self.actor.reset_noise(batch_size=batch_size)
 
+
     def make_actor(self, features_extractor: Optional[BaseFeaturesExtractor] = None) -> Actor:
+        
         actor_kwargs = self._update_features_extractor(self.actor_kwargs, features_extractor)
         return Actor(**actor_kwargs).to(self.device)
 
+
     def make_critic(self, features_extractor: Optional[BaseFeaturesExtractor] = None) -> ContinuousCritic:
+        
         critic_kwargs = self._update_features_extractor(self.critic_kwargs, features_extractor)
         return ContinuousCritic(**critic_kwargs).to(self.device)
 
+
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
-        return self._predict(obs, deterministic=deterministic)
+        
+        """ calculate action map, return the action having max Q value(Q_max)
+        obs: (B, 3, N)
+        """
+
+        actions_pointwise = self.actor(obs, deterministic=deterministic) # (B, N, 10)
+        q_values = th.cat(self.critic(obs, actions_pointwise), dim=2) # (B, N, 2)
+        min_q_values = th.min(q_values, dim=2).values # (B, N)
+        q_values_distribution = th.nn.functional.softmax(min_q_values, dim=1) # (B, N)
+        sample_anchor_index = q_values_distribution.multinomial(num_samples=1) # (B, 1)
+        pts = obs.transpose(1, 2) # (B, N, 3)
+        sample_anchor = th.gather(pts, 1, sample_anchor_index.unsqueeze(-1).expand(-1, -1, 3)).squeeze(1) # (B, 3)
+        sample_anchor_offsets = th.gather(actions_pointwise, 1, sample_anchor_index.unsqueeze(-1).expand(-1, -1, 7)).squeeze(1) # (B, 7)
+        soft_anchor_params = th.cat((sample_anchor, sample_anchor_offsets), dim=1) # (B, 10)
+        return soft_anchor_params
+
 
     def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
-        return self.actor(observation, deterministic)
+        return self(observation, deterministic)
+
 
     def set_training_mode(self, mode: bool) -> None:
         """
@@ -365,7 +409,9 @@ class SACPolicy(BasePolicy):
         self.training = mode
 
 
+
 MlpPolicy = SACPolicy
+
 
 
 class CnnPolicy(SACPolicy):
@@ -432,6 +478,7 @@ class CnnPolicy(SACPolicy):
             n_critics,
             share_features_extractor,
         )
+
 
 
 class MultiInputPolicy(SACPolicy):

@@ -202,7 +202,7 @@ class ResultsWriter:
 
     def write_row(self, epinfo: Dict[str, float]) -> None:
         """
-        Write row of monitor data to csv log file.
+        Close the file handler
 
         :param epinfo: the information on episodic return, length, and time
         """
