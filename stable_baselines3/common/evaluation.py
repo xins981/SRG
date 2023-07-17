@@ -19,8 +19,8 @@ def evaluate_policy(
     return_episode_rewards: bool = False,
     warn: bool = True,
 ) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
-    """
-    Runs policy for ``n_eval_episodes`` episodes and returns average reward.
+    
+    """ Runs policy for ``n_eval_episodes`` episodes and returns average reward.
     If a vector env is passed in, this divides the episodes to evaluate onto the
     different elements of the vector env. This static division of work is done to
     remove bias. See https://github.com/DLR-RM/stable-baselines3/issues/402 for more
@@ -54,6 +54,7 @@ def evaluate_policy(
         list containing per-episode rewards and second containing per-episode lengths
         (in number of steps).
     """
+    
     is_monitor_wrapped = False
     # Avoid circular import
     from stable_baselines3.common.monitor import Monitor

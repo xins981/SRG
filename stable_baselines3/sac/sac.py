@@ -17,65 +17,6 @@ SelfSAC = TypeVar("SelfSAC", bound="SAC")
 
 class SAC(OffPolicyAlgorithm):
     
-    """ Soft Actor-Critic (SAC)
-    Off-Policy Maximum Entropy Deep Reinforcement Learning with a Stochastic Actor,
-    This implementation borrows code from original implementation (https://github.com/haarnoja/sac)
-    from OpenAI Spinning Up (https://github.com/openai/spinningup), from the softlearning repo
-    (https://github.com/rail-berkeley/softlearning/)
-    and from Stable Baselines (https://github.com/hill-a/stable-baselines)
-    Paper: https://arxiv.org/abs/1801.01290
-    Introduction to SAC: https://spinningup.openai.com/en/latest/algorithms/sac.html
-
-    Note: we use double q target and not value target as discussed
-    in https://github.com/hill-a/stable-baselines/issues/270
-
-    :param policy: The policy model to use (MlpPolicy, CnnPolicy, ...)
-    :param env: The environment to learn from (if registered in Gym, can be str)
-    :param learning_rate: learning rate for adam optimizer,
-        the same learning rate will be used for all networks (Q-Values, Actor and Value function)
-        it can be a function of the current progress remaining (from 1 to 0)
-    :param buffer_size: size of the replay buffer
-    :param learning_starts: how many steps of the model to collect transitions for before learning starts
-    :param batch_size: Minibatch size for each gradient update
-    :param tau: the soft update coefficient ("Polyak update", between 0 and 1)
-    :param gamma: the discount factor
-    :param train_freq: Update the model every ``train_freq`` steps. Alternatively pass a tuple of frequency and unit
-        like ``(5, "step")`` or ``(2, "episode")``.
-    :param gradient_steps: How many gradient steps to do after each rollout (see ``train_freq``)
-        Set to ``-1`` means to do as many gradient steps as steps done in the environment
-        during the rollout.
-    :param action_noise: the action noise type (None by default), this can help
-        for hard exploration problem. Cf common.noise for the different action noise type.
-    :param replay_buffer_class: Replay buffer class to use (for instance ``HerReplayBuffer``).
-        If ``None``, it will be automatically selected.
-    :param replay_buffer_kwargs: Keyword arguments to pass to the replay buffer on creation.
-    :param optimize_memory_usage: Enable a memory efficient variant of the replay buffer
-        at a cost of more complexity.
-        See https://github.com/DLR-RM/stable-baselines3/issues/37#issuecomment-637501195
-    :param ent_coef: Entropy regularization coefficient. (Equivalent to
-        inverse of reward scale in the original SAC paper.)  Controlling exploration/exploitation trade-off.
-        Set it to 'auto' to learn it automatically (and 'auto_0.1' for using 0.1 as initial value)
-    :param target_update_interval: update the target network every ``target_network_update_freq``
-        gradient steps.
-    :param target_entropy: target entropy when learning ``ent_coef`` (``ent_coef = 'auto'``)
-    :param use_sde: Whether to use generalized State Dependent Exploration (gSDE)
-        instead of action noise exploration (default: False)
-    :param sde_sample_freq: Sample a new noise matrix every n steps when using gSDE
-        Default: -1 (only sample at the beginning of the rollout)
-    :param use_sde_at_warmup: Whether to use gSDE instead of uniform sampling
-        during the warm up phase (before learning starts)
-    :param stats_window_size: Window size for the rollout logging, specifying the number of episodes to average
-        the reported success rate, mean episode length, and mean reward over
-    :param tensorboard_log: the log location for tensorboard (if None, no logging)
-    :param policy_kwargs: additional arguments to be passed to the policy on creation
-    :param verbose: Verbosity level: 0 for no output, 1 for info messages (such as device or wrappers used), 2 for
-        debug messages
-    :param seed: Seed for the pseudo random generators
-    :param device: Device (cpu, cuda, ...) on which the code should be run.
-        Setting it to auto, the code will be run on the GPU if possible.
-    :param _init_setup_model: Whether or not to build the network at the creation of the instance
-    """
-    
     policy_aliases = {"MlpPolicy": MlpPolicy}
     policy: SACPolicy
     actor: Actor
@@ -84,9 +25,9 @@ class SAC(OffPolicyAlgorithm):
     
     def __init__(
         self,
-        policy: Union[str, Type[SACPolicy]],
-        env: Union[GymEnv, str],
-        learning_rate: Union[float, Schedule] = 3e-4,
+        policy,
+        env,
+        learning_rate=3e-4,
         buffer_size: int = 1_000_000,  # 1e6
         learning_starts: int = 100,
         batch_size: int = 256,
@@ -224,11 +165,12 @@ class SAC(OffPolicyAlgorithm):
 
             # Action by the current actor for the sampled state
             new_anchor_offsets, new_log_prob = self.actor.action_log_prob(replay_data.observations)  # (B, N, 7), (B, N)
-            new_anchor = replay_data.observations.transpose(1, 2) # (B, N, 3)
-            new_action = th.cat((new_anchor, new_anchor_offsets), dim=2) # (B, N, 10)
-            new_q_values = th.cat(self.critic_target(replay_data.observations, new_action), dim=2)
-            new_q_values = th.min(new_q_values, dim=2).values # (B, N)
-            new_location_distribution = th.nn.functional.softmax(new_q_values/self.location_temperature, dim=1) # (B, N)
+            with th.no_grad():
+                new_anchor = replay_data.observations.transpose(1, 2) # (B, N, 3)
+                new_action = th.cat((new_anchor, new_anchor_offsets), dim=2) # (B, N, 10)
+                new_q_values = th.cat(self.critic_target(replay_data.observations, new_action), dim=2)
+                new_q_values = th.min(new_q_values, dim=2).values # (B, N)
+                new_location_distribution = th.nn.functional.softmax(new_q_values/self.location_temperature, dim=1) # (B, N)
 
             ent_coef_loss = None
             if self.ent_coef_optimizer is not None and self.log_ent_coef is not None:
@@ -270,18 +212,10 @@ class SAC(OffPolicyAlgorithm):
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
             current_actions = replay_data.actions # (B, 10)
-            current_actions = th.unsqueeze(current_actions, dim=1)
-            current_actions = current_actions.expand(current_actions.shape[0], replay_data.observations.shape[2], current_actions.shape[2])
-            current_q_values = self.critic(replay_data.observations, current_actions) # 2 *（B, N, 1)
+            current_q_values = self.critic(replay_data.observations, current_actions) # 2 *（B, 1)
             
             # Compute critic loss
-            point_cloud = replay_data.observations.transpose(1, 2) # (B, N, 3)
-            current_point = replay_data.actions[:, :3] # (B, 3)
-            current_point = current_point.unsqueeze(1) # (B, 1, 3)
-            distances = th.norm(point_cloud-current_point, dim=2) # (B, N)
-            action_index = th.argmin(distances, dim=1, keepdim=True) # (B, 1)
-            action_index = action_index.unsqueeze(-1).expand(-1, -1, 1)
-            critic_loss = 0.5 * sum(F.mse_loss(th.gather(current_q, 1, action_index).squeeze(1), target_q_values) for current_q in current_q_values)
+            critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
             assert isinstance(critic_loss, th.Tensor)  # for type checker
             critic_losses.append(critic_loss.item())  # type: ignore[union-attr]
 
@@ -320,12 +254,8 @@ class SAC(OffPolicyAlgorithm):
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))
 
     
-    def learn(self, total_timesteps, callback=None, log_interval=4, 
-              tb_log_name="SAC", reset_num_timesteps=True, progress_bar=False):
+    def learn(self, total_timesteps, callback=None, log_interval=4, tb_log_name="SAC", reset_num_timesteps=True, progress_bar=False):
         
-        ''' interact with env, collect data
-        '''
-
         return super().learn(
             total_timesteps=total_timesteps,
             callback=callback,

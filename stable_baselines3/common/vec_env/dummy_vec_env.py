@@ -12,8 +12,8 @@ from stable_baselines3.common.vec_env.util import copy_obs_dict, dict_to_obs, ob
 
 
 class DummyVecEnv(VecEnv):
-    """
-    Creates a simple vectorized wrapper for multiple environments, calling each environment in sequence on the current
+    
+    """ Creates a simple vectorized wrapper for multiple environments, calling each environment in sequence on the current
     Python process. This is useful for computationally simple environment such as ``Cartpole-v1``,
     as the overhead of multiprocess or multithread outweighs the environment computation time.
     This can also be used for RL methods that

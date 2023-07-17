@@ -15,23 +15,18 @@ import open3d as o3d
 
 
 
-# SIMULATION_STEP_DELAY = 1 / 240.
-SIMULATION_STEP_DELAY = 0
-# SIMULATION_STEP_DELAY = 1 / 10.
-
-
-
 class Environment(gym.Env):
 
-    def __init__(self, vis=True):
+    def __init__(self, vis=False):
 
         self.debug_frame = dict()
         self.workspace_limits = np.asarray([[0.304, 0.752], [-0.02, 0.428], [0, 0.4]])
+        anchor_offset_limits = self.workspace_limits * 100
         
-        # action_params: [:3] anchor m; [3:6] anchor offset cm; [6:9] axis_y; [9] approach angle;
-        action_down = np.array([-np.inf, -np.inf, -np.inf, -5, -5, -5, -1, -1, -1, -np.pi/2])
-        action_up = np.array([np.inf, np.inf, np.inf, 5, 5, 5, 1, 1, 1, np.pi/2])
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(3, 5000), dtype=np.float16)
+        # action_params: [:3] anchor m; [3:6] anchor offset cm; [6:9] axis_y; [9] approach angle;
+        action_down = np.array([-np.inf, -np.inf, -np.inf, anchor_offset_limits[0,0], anchor_offset_limits[1,0], anchor_offset_limits[2,0], 0, 0, 0, -np.pi/2])
+        action_up = np.array([np.inf, np.inf, np.inf, anchor_offset_limits[0,1], anchor_offset_limits[1,1], anchor_offset_limits[2,1], 1, 1, 1, np.pi/2])
         self.action_space = spaces.Box(action_down, action_up, shape=(10,), dtype=np.float16)
 
         # Connect to simulator
@@ -94,20 +89,16 @@ class Environment(gym.Env):
         
         super().reset(seed=seed, options=options)
         
-        self._num_step = 0
-        
         self.gripper.reset()
         
         self._clean_objects()
         drop_x = (self.workspace_limits[0][1] - self.workspace_limits[0][0] - 0.2) * np.random.random_sample() + self.workspace_limits[0][0] + 0.1
         drop_y = (self.workspace_limits[1][1] - self.workspace_limits[1][0] - 0.2) * np.random.random_sample() + self.workspace_limits[1][0] + 0.1
         self.object_in_world = np.eye(4)
-        self.object_in_world[:3,3] = [drop_x, drop_y, 0.15]
+        self.object_in_world[:3,3] = [drop_x, drop_y, 0.20]
         add_success = self._add_objects()
         while add_success == False:
             add_success = self._add_objects()
-        # for obj_id in self.obj_ids:
-        #     self.high_contrast_body(body_id=obj_id)
 
         observation = self._get_obs()
         
@@ -115,7 +106,7 @@ class Environment(gym.Env):
 
 
     def step(self, action_param):
-        self._num_step += 1
+        
         self.grasp_matrix_in_camera = self._param_to_grasp(grasp_param=action_param)
         grasp_in_world = self.camera.view_matrix @ self.grasp_matrix_in_camera
         gripper_in_world = grasp_in_world @ self.gripper.gripper_in_grasp
@@ -128,7 +119,7 @@ class Environment(gym.Env):
         self.pb_utils.set_body_pose_in_world(self.gripper.id, gripper_in_world)
         contact_pts_gripper_obj = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.obj_ids[0])
         contact_pts_gripper_plane = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.env_body['plane'])
-        if len(contact_pts_gripper_obj) != 0 or len(contact_pts_gripper_plane) != 0:
+        if len(contact_pts_gripper_obj) != 0 or len(contact_pts_gripper_plane) != 0: # gripper invoke target object
             terminated = False
         else:
             self.gripper.close()
@@ -153,10 +144,10 @@ class Environment(gym.Env):
     #---------------------------------------------------------------------------
     # Environment Control Functions
     #---------------------------------------------------------------------------
-    def _step_simulation(self, delay=SIMULATION_STEP_DELAY):
+    def _step_simulation(self, delay=None):
        
         self.sim.stepSimulation()
-        if self._vis:
+        if self._vis and delay != None:
             time.sleep(delay)
 
 
@@ -242,12 +233,15 @@ class Environment(gym.Env):
         for name, id in self.env_body.items():
             bg_mask[seg==id] = 1
         pts = utils.depth2xyzmap(depth, self.camera._k)
-        pts_no_bg = pts[bg_mask==0].reshape(-1,3)
-        if pts_no_bg.shape[0] < self.observation_space.shape[1]:
-            num_pts = pts_no_bg.shape[0]
-        num_pts = self.observation_space.shape[1]
-        downsample_indxs = utils.farthest_point_sample(pts=pts_no_bg, npoint=num_pts)
-        obs = pts_no_bg[downsample_indxs].T # (3, N)
+        pts_no_bg = pts[bg_mask==0].reshape(-1,3) # (N,3)
+        if pts_no_bg.shape[0] > self.observation_space.shape[1]:
+            num_pts = self.observation_space.shape[1]
+            downsample_indxs = utils.farthest_point_sample(pts=pts_no_bg, npoint=num_pts)
+            obs = pts_no_bg[downsample_indxs]
+        else:
+            obs = np.zeros((self.observation_space.shape[1], 3))
+        obs = obs.T
+        
         return obs
 
 

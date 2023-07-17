@@ -68,8 +68,8 @@ def _worker(
 
 
 class SubprocVecEnv(VecEnv):
-    """
-    Creates a multiprocess vectorized wrapper for multiple environments, distributing each environment to its own
+    
+    """  Creates a multiprocess vectorized wrapper for multiple environments, distributing each environment to its own
     process, allowing significant speed up when the environment is computationally complex.
 
     For performance reasons, if your environment is not IO bound, the number of environments should not exceed the

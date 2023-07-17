@@ -367,7 +367,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             # Warmup phase
             unscaled_action = []
             for i in range(n_envs):
-                action_point_ind = np.random.randint(0, self.observation_space.shape[2])
+                action_point_ind = np.random.randint(0, self.observation_space.shape[1])
                 action_point = self._last_obs[i, :, action_point_ind]
                 action_off = self.action_space.sample()
                 action_off = action_off[3:] # drop random anchor coordinates
@@ -378,7 +378,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             # Note: when using continuous actions,
             # we assume that the policy uses tanh to scale the action
             # We use non-deterministic action in the case of SAC, for TD3, it does not matter
-            unscaled_action, _ = self.predict(self._last_obs, deterministic=False) # （B, N, 7)
+            unscaled_action, _ = self.predict(self._last_obs) # （B, N, 7)
 
         # Rescale the action from [low, high] to [-1, 1]
         if isinstance(self.action_space, spaces.Box):
@@ -463,8 +463,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
 
         # Avoid modification by reference
         next_obs = deepcopy(new_obs_)
-        # As the VecEnv resets automatically, new_obs is already the
-        # first observation of the next episode
+        # As the VecEnv resets automatically, new_obs is already the first observation of the next episode
         for i, done in enumerate(dones):
             if done and infos[i].get("terminal_observation") is not None:
                 if isinstance(next_obs, dict):
@@ -506,8 +505,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         learning_starts: int = 0,
         log_interval: Optional[int] = None,
     ) -> RolloutReturn:
-        """
-        Collect experiences and store them into a ``ReplayBuffer``.
+        
+        """ Collect experiences and store them into a ``ReplayBuffer``.
 
         :param env: The training environment
         :param callback: Callback that will be called at each step
@@ -525,6 +524,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         :param log_interval: Log data every ``log_interval`` episodes
         :return:
         """
+        
         # Switch to eval mode (this affects batch norm / dropout)
         self.policy.set_training_mode(False)
 

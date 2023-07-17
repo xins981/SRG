@@ -162,6 +162,7 @@ class UR5Robotiq85(RobotBase):
                                 force=self.joints[self.mimic_parent_id].maxForce, maxVelocity=self.joints[self.mimic_parent_id].maxVelocity)
 
 
+
 class Gripper:
 
     def __init__(self, simulator, pybullet_utils):
@@ -203,19 +204,16 @@ class Gripper:
 
 
     def close(self):
-        self._move_finger(target_positions=[1, 1], step=50, delay=1/10.)
+        self._move_finger(target_positions=[1, 1], step=50, delay=1/10)
+        # self._move_finger(target_positions=[1, 1], step=50)
 
 
     def _move_finger(self, target_positions, step, delay=None):
         
         self.sim.setJointMotorControlArray(self.id,jointIndices=self.finger_ids,controlMode=p.POSITION_CONTROL,
                                             targetPositions=target_positions,forces=self.gripper_max_force)
-        if delay != None:
-            for _ in range(step):
-                self.step_simulation(delay=delay)
-        else:
-            for _ in range(step):
-                self.step_simulation()
+        for _ in range(step):
+            self.step_simulation(delay=delay)
     
 
     def step_simulation(self):

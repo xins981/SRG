@@ -492,9 +492,8 @@ def should_collect_more_steps(
     num_collected_steps: int,
     num_collected_episodes: int,
 ) -> bool:
-    """
-    Helper used in ``collect_rollouts()`` of off-policy algorithms
-    to determine the termination condition.
+    
+    """ Helper used in ``collect_rollouts()`` of off-policy algorithms to determine the termination condition.
 
     :param train_freq: How much experience should be collected before updating the policy.
     :param num_collected_steps: The number of already collected steps.
@@ -502,12 +501,13 @@ def should_collect_more_steps(
     :return: Whether to continue or not collecting experience
         by doing rollouts of the current policy.
     """
+    
     if train_freq.unit == TrainFrequencyUnit.STEP:
         return num_collected_steps < train_freq.frequency
-
+    
     elif train_freq.unit == TrainFrequencyUnit.EPISODE:
         return num_collected_episodes < train_freq.frequency
-
+    
     else:
         raise ValueError(
             "The unit of the `train_freq` must be either TrainFrequencyUnit.STEP "

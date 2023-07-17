@@ -959,8 +959,18 @@ class ContinuousCritic(BaseModel):
         with th.set_grad_enabled(not self.share_features_extractor):
             features = self.extract_features(obs, self.features_extractor) # (B, 1088, N)
         features = features.transpose(1, 2) # (B, N, 1088)
-        qvalue_input = th.cat([features, actions], dim=2) # (B, N, 1098)
-        return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, N, 1)
+        if len(actions.shape) < 3:
+            point_cloud = obs.transpose(1, 2) 
+            current_point = actions[:, :3].unsqueeze(1) # (B, 1, 3)
+            distances = th.norm(point_cloud-current_point, dim=2) # (B, N)
+            action_index = th.argmin(distances, dim=1, keepdim=True) # (B, 1)
+            action_index = action_index.unsqueeze(-1).expand(-1, -1, 1088)
+            features = th.gather(features, 1, action_index).squeeze(1)
+            qvalue_input = th.cat([features, actions], dim=1) # (B, 1098)
+            return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, 1)
+        else:
+            qvalue_input = th.cat([features, actions], dim=2) # (B, N, 1098)
+            return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, N, 1)
 
 
     def q1_forward(self, obs: th.Tensor, actions: th.Tensor) -> th.Tensor:

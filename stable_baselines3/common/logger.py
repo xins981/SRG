@@ -498,8 +498,8 @@ class Logger:
         return (string_or_tuple,)
 
     def record(self, key: str, value: Any, exclude: Optional[Union[str, Tuple[str, ...]]] = None) -> None:
-        """
-        Log a value of some diagnostic
+        
+        """ Log a value of some diagnostic
         Call this once for each diagnostic quantity, each iteration
         If called many times, last value will be used.
 
@@ -507,6 +507,7 @@ class Logger:
         :param value: save to log this value
         :param exclude: outputs to be excluded
         """
+
         self.name_to_value[key] = value
         self.name_to_excluded[key] = self.to_tuple(exclude)
 
@@ -540,8 +541,8 @@ class Logger:
         self.name_to_excluded.clear()
 
     def log(self, *args, level: int = INFO) -> None:
-        """
-        Write the sequence of args, with no separators,
+        
+        """ Write the sequence of args, with no separators,
         to the console and output files (if you've configured an output file).
 
         level: int. (see logger.py docs) If the global logger level is higher than
@@ -550,6 +551,7 @@ class Logger:
         :param args: log the arguments
         :param level: the logging level (can be DEBUG=10, INFO=20, WARN=30, ERROR=40, DISABLED=50)
         """
+
         if self.level <= level:
             self._do_log(args)
 

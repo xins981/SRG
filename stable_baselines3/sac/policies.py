@@ -376,10 +376,6 @@ class SACPolicy(BasePolicy):
 
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
         
-        """ calculate action map, return the action having max Q value(Q_max)
-        obs: (B, 3, N)
-        """
-
         actions_pointwise = self.actor(obs, deterministic=deterministic) # (B, N, 10)
         q_values = th.cat(self.critic(obs, actions_pointwise), dim=2) # (B, N, 2)
         min_q_values = th.min(q_values, dim=2).values # (B, N)
