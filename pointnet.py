@@ -5,7 +5,6 @@ import torch.utils.data
 from torch.autograd import Variable
 import numpy as np
 import torch.nn.functional as F
-from gymnasium import spaces
 
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
@@ -89,34 +88,34 @@ class STNkd(nn.Module):
 
 class PointNetExtractor(BaseFeaturesExtractor):
 
-    def __init__(self, observation_space, features_dim, feature_transform=False, global_feat=False):
+    def __init__(self, observation_space, features_dim=1088, feature_transform=False):
         super().__init__(observation_space, features_dim)
-        self.global_feat = global_feat
         self.feature_transform = feature_transform
-        self.in_dim = observation_space.shape[0] # (3, N)
+        self.in_dim = observation_space.shape[1]
         
         self.stn = STN3d(self.in_dim)
         self.conv1 = torch.nn.Conv1d(self.in_dim, 64, 1)
         self.conv2 = torch.nn.Conv1d(64, 128, 1)
-        self.conv3 = torch.nn.Conv1d(128, features_dim-64, 1)
+        self.conv3 = torch.nn.Conv1d(128, 1024, 1)
         self.bn1 = nn.BatchNorm1d(64)
         self.bn2 = nn.BatchNorm1d(128)
-        self.bn3 = nn.BatchNorm1d(features_dim-64)
+        self.bn3 = nn.BatchNorm1d(1024)
         if self.feature_transform:
             self.fstn = STNkd(k=64)
 
     def forward(self, x):
-        B, D, N = x.size()
+        B, N, D = x.size() # (B, N, 3)
+        x = x.transpose(2, 1) # (B, D, N)
         trans = self.stn(x)
-        x = x.transpose(2, 1)
+        x = x.transpose(2, 1) # (B, N, D)
         if D > 3:
             feature = x[:, :, 3:]
             x = x[:, :, :3]
         x = torch.bmm(x, trans)
         if D > 3:
             x = torch.cat([x, feature], dim=2)
-        x = x.transpose(2, 1)
-        x = F.relu(self.bn1(self.conv1(x))) 
+        x = x.transpose(2, 1) # (B, D, N)
+        x = F.relu(self.bn1(self.conv1(x))) # point-wise feature (B, 64, N)
 
         if self.feature_transform:
             trans_feat = self.fstn(x)
@@ -126,22 +125,11 @@ class PointNetExtractor(BaseFeaturesExtractor):
         else:
             trans_feat = None
 
-        pointfeat = x # (B, 64, N)
+        point_feature = x
         x = F.relu(self.bn2(self.conv2(x)))
         x = self.bn3(self.conv3(x))
         x = torch.max(x, 2, keepdim=True)[0]
-        x = x.view(-1, 1024)
-        if self.global_feat == True: 
-            return x # (B, 1024)
-        else:
-            x = x.view(-1, 1024, 1).repeat(1, 1, N)
-            return torch.cat([x, pointfeat], 1) # (B, 1088, N)
-
-
-def feature_transform_reguliarzer(trans):
-    d = trans.size()[1]
-    I = torch.eye(d)[None, :, :]
-    if trans.is_cuda:
-        I = I.cuda()
-    loss = torch.mean(torch.norm(torch.bmm(trans, trans.transpose(2, 1)) - I, dim=(1, 2)))
-    return loss
+        x = x.view(-1, 1024, 1).repeat(1, 1, N)
+        ret_feature = torch.cat([x, point_feature], 1) # (B, 1088, N)
+        ret_feature = ret_feature.transpose(1, 2) # (B, N, 1088)
+        return ret_feature

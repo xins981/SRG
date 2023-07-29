@@ -4,76 +4,100 @@ from pointnet import PointNetExtractor
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv
 from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.callbacks import EvalCallback
-import os, time, datetime
-os.environ['DISPLAY'] = ':10.0'
+from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback, HParamCallback, EvalCallback
+from stable_baselines3.common.monitor import Monitor
+import os, datetime
+import yaml
+os.environ['DISPLAY'] = ':11.0'
 
 
-
-# env = Environment(vis=True)
-
-# policy_kwargs = dict(features_extractor_class=PointNetExtractor,
-#                     features_extractor_kwargs=dict(features_dim=1088),
-#                     net_arch=[128, 64])
-
-# model = SAC(policy="MlpPolicy", env=env, learning_starts=0, batch_size=64, 
-#             policy_kwargs=policy_kwargs, verbose=1)
-# model.learn(total_timesteps=1000, log_interval=1)
-# vec_env = model.get_env()
-# obs, info = vec_env.reset()
-
-# # obs, info = env.reset() # obs: (D, N)
-# while True:
-#     # Random action
-#     # action_point_ind = np.random.randint(0, env.observation_space.shape[0])
-#     # action_point = obs[:,action_point_ind]
-#     # action_off = env.action_space.sample()
-#     # action_off = action_off[3:] # drop random anchor coordinates
-#     # action = np.concatenate((action_point, action_off))
-#     # obs, reward, terminated, truncated, info = env.step(action)
-#     # if terminated:
-#     #     obs, info = env.reset()
-
-#     action, state = model.predict(obs)
-#     obs, reward, terminated, truncated, info = vec_env.step(action)
-#     if terminated:
-#         obs, info = vec_env.reset()
-
-
-
-def make_env(rank, seed=0):
+def make_env(rank, seed=0, vis=False, episode_timestemp=5, reward_scale=10):
     
     def _init():
-        env = Environment()
+        
+        env = Environment(vis=vis, episode_timestemp=episode_timestemp, reward_scale=reward_scale)
+        env = Monitor(env)
         env.reset(seed=seed + rank)
+        
         return env
     
     set_random_seed(seed)
 
     return _init
 
-if __name__ == "__main__":
-    # n_training_envs = 64
-    # train_env = SubprocVecEnv([make_env(rank=i) for i in range(n_training_envs)])
+
+def train():
     
-    # train_log_dir = f"logs/train/{datetime.datetime.fromtimestamp(time.time()).strftime('%Y-%m-%d.%H:%M:%S')}"
-    # policy_kwargs = dict(features_extractor_class=PointNetExtractor, 
-    #                      features_extractor_kwargs=dict(features_dim=1088), 
-    #                      net_arch=[256, 128, 64])
-    # model = SAC(env=train_env, policy="MlpPolicy", policy_kwargs=policy_kwargs, batch_size=64,
-    #             gradient_steps=32, tensorboard_log=train_log_dir, verbose=1)
-    # model.learn(total_timesteps=100_000)
-    # model.save("sac_grasp")
-    # model.save_replay_buffer("sac_replay_buffer")
-
+    experiment_dir = f"logs/experiment/{datetime.datetime.now().strftime('%Y-%m-%d.%H:%M:%S')}"
+    policy_kwargs = dict(features_extractor_class=PointNetExtractor, 
+                        features_extractor_kwargs=dict(features_dim=1088),
+                        net_arch=[256, 256],
+                        boltzmann_beta=5)
     
+    n_training_envs = 64
+    n_eval_envs = 8
+    episode_timestemp = 5
+    reward_scale = 10
+    total_timesteps = 1000_000
+    train_env = SubprocVecEnv([make_env(rank=i, episode_timestemp=episode_timestemp, reward_scale=reward_scale) for i in range(n_training_envs)])
+    eval_env = SubprocVecEnv([make_env(rank=i, episode_timestemp=episode_timestemp, reward_scale=reward_scale) for i in range(n_training_envs, n_training_envs + n_eval_envs)])
 
-    loaded_model = SAC.load("sac_grasp")
-    # load it into the loaded_model
-    # loaded_model.load_replay_buffer("sac_replay_buffer")
+    for i in range(1, 2): # different hyper-parameters
 
-    # now the loaded replay is not empty anymore
-    # print(f"The loaded_model has {loaded_model.replay_buffer.size()} transitions in its buffer")
+        for j in range(1, 2): # different seed
+
+            session_dir = f"{experiment_dir}/trial_{i}/session_{j}"
+            
+            checkpoint_callback = CheckpointCallback(save_freq=max(5000 // n_training_envs, 1), save_path=f"{session_dir}/checkpoints", 
+                                                     name_prefix="sac_model", save_replay_buffer=True)
+            eval_callback = EvalCallback(eval_env, best_model_save_path=session_dir, log_path=session_dir, 
+                                         deterministic=True, eval_freq=max(1000 // n_training_envs, 1), n_eval_episodes=8)
+            callback_list = CallbackList([checkpoint_callback, eval_callback])
+
+            model = SAC(env=train_env, policy="MlpPolicy", policy_kwargs=policy_kwargs, 
+                        gamma=0.8, tau=0.005, batch_size=256, gradient_steps=8, learning_starts=1000, 
+                        blm_update_step=10000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
+            model.learn(total_timesteps=total_timesteps, callback=callback_list)
+            
+            with open(f'{session_dir}/hyparam.yaml','a') as f:
+                hyparam_dict = {
+                    "episode timestep": episode_timestemp,
+                    "reward scale": reward_scale,
+                    "total timesteps": total_timesteps,
+                    "num of env": model.n_envs,
+                    "buffer size": model.buffer_size,
+                    "learning start": model.learning_starts,
+                    "train frequency": model.train_freq.frequency,
+                    "learning rate": model.learning_rate,
+                    "gamma": model.gamma,
+                    "tau": model.tau,
+                    "gradient step": model.gradient_steps,
+                    "batch size": model.batch_size,
+                    "feature dim": model.policy_kwargs["features_extractor_kwargs"]["features_dim"],
+                    "net arch": model.policy_kwargs["net_arch"],
+                }
+                yaml.dump(hyparam_dict, f)
+
+            model.save(f"{session_dir}/trained_model")
+            model.save_replay_buffer(f"{session_dir}/trained_model_replay_buffer")
+    
+    train_env.close()
+    eval_env.close()
+
+
+def eval(model_dir, log_dir):
+    best_model = SAC.load(model_dir)
     eval_env = Environment(vis=True)
-    mean_reward, std_reward = evaluate_policy(loaded_model, eval_env, n_eval_episodes=10, deterministic=True, warn=False)
+    eval_env = Monitor(eval_env, filename=log_dir)
+    mean_reward, std_reward = evaluate_policy(best_model, eval_env, n_eval_episodes=5, deterministic=True)
     print(f"mean_reward={mean_reward:.2f} +/- {std_reward}")
+
+
+if __name__ == "__main__":
+    
+    train()
+
+    # eval(model_dir='logs/experiment/2023-07-27.12:13:10/trial_1/session_1/best_model.zip', 
+    #      log_dir='logs/experiment/2023-07-24.22:16:04/trial_1/session_1/eval')
+
+    

@@ -3,7 +3,75 @@ import transformations as tf
 import copy
 import open3d as o3d
 from collections import namedtuple
+import torch
 
+
+def to_grasp(param):
+
+    p = param[0:3]
+    axis_y = param[3:6]
+    theta = param[6] # approach angle
+
+    axis_x = [axis_y[1], -axis_y[0], 0]
+    axis_z = np.cross(axis_x, axis_y)
+
+    cos_t, sin_t = np.cos(theta), np.sin(theta)
+    perturbation = np.array([[cos_t, 0, sin_t],
+                            [0    , 1,     0],
+                            [-sin_t, 0, cos_t]])
+    r = np.stack((axis_x, axis_y, axis_z)).T
+    r_iden = normalize_rotation(r)
+    
+    T = np.eye(4)
+    T[:3,:3] = r_iden @ perturbation
+    T[:3,3] = p
+
+    return T
+
+
+
+    # norm_y = np.linalg.norm(axis_y)
+    # axis_y = axis_y / norm_y if norm_y > 0 else [0, 1, 0]
+    # axis_x = [axis_y[1], -axis_y[0], 0]
+    # norm_x = np.linalg.norm(axis_x)
+    # axis_x = axis_x / norm_x if norm_x > 0 else [1, 0, 0]
+    # axis_z = np.cross(axis_x, axis_y)
+    # norm_z = np.linalg.norm(axis_z)
+    # axis_z = axis_z / norm_z if norm_z > 0 else [0, 0, 1]
+
+
+def normalize_rotation(pose):
+  '''Assume no shear case
+  '''
+  new_pose = pose.copy()
+  scales = np.linalg.norm(pose[:3,:3],axis=0)
+  new_pose[:3,:3] /= scales.reshape(1,3)
+  return new_pose
+
+
+def batch_param_to_grasp(grasp_param, device=None):
+
+    if len(grasp_param.shape) < 3: # (B, 10)
+
+        grasp_poses = []
+        for param in grasp_param:
+            action = param2action(param)
+            grasp_poses.append(action)
+    else: # (B, N, 10)
+
+        grasp_poses = []
+        for batch in grasp_param:
+            batch_poses = [] # (N, 7)
+            for param in batch:
+                action = param2action(param)
+                batch_poses.append(action)
+            grasp_poses.append(batch_poses)
+
+    grasp_poses = np.array(grasp_poses, dtype=np.float32)
+    if device != None:
+        grasp_poses = torch.from_numpy(grasp_poses).to(device)
+    
+    return grasp_poses
 
 
 def create_urdf_from_mesh(mesh_dir,concave=False, out_dir=None, mass=0.1, has_collision=True, scale=np.ones((3))):
@@ -75,6 +143,7 @@ def depth2xyzmap(depth, K):
     pts = np.stack((xs.reshape(-1),ys.reshape(-1),zs.reshape(-1)), 1)  #(N,3)
     xyz_map = pts.reshape(H,W,3).astype(np.float32)
     xyz_map[invalid_mask] = 0
+    
     return xyz_map.astype(np.float32)
 
 
@@ -107,19 +176,12 @@ def toOpen3dCloud(points, colors=None, normals=None):
     return cloud
 
 
-def safe_zip(sequence1, sequence2):
-    sequence1, sequence2 = list(sequence1), list(sequence2)
-    assert len(sequence1) == len(sequence2)
-    return list(zip(sequence1, sequence2))
-
-
 def normalizeRotation(pose):
 
     new_pose = pose.copy()
     scales = np.linalg.norm(pose[:3,:3],axis=0)
     new_pose[:3,:3] /= scales.reshape(1,3)
     return new_pose
-
 
 
 #---------------------------------------------------------------------------
@@ -166,7 +228,7 @@ class Pybullet_Utils:
 
 
     def set_joint_positions(self, body, joints, values):
-        for joint, value in safe_zip(joints, values):
+        for joint, value in tf.safe_zip(joints, values):
             self.set_joint_position(body, joint, value)
 
 

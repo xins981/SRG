@@ -82,7 +82,7 @@ class Actor(BasePolicy):
         self.full_std = full_std
         self.clip_mean = clip_mean
         action_dim = get_action_dim(self.action_space)
-        latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn) # 
+        latent_pi_net = create_mlp(features_dim, -1, net_arch, activation_fn)
         self.latent_pi = nn.Sequential(*latent_pi_net)
         last_layer_dim = net_arch[-1] if len(net_arch) > 0 else features_dim
 
@@ -98,10 +98,10 @@ class Actor(BasePolicy):
             if clip_mean > 0.0:
                 self.mu = nn.Sequential(self.mu, nn.Hardtanh(min_val=-clip_mean, max_val=clip_mean))
         else:
-            self.action_dist = SquashedDiagGaussianDistribution(action_dim-3)  # type: ignore[assignment]
+            self.action_dist = SquashedDiagGaussianDistribution(action_dim)  # type: ignore[assignment]
             # actor output layer
-            self.mu = nn.Linear(last_layer_dim, action_dim-3)
-            self.log_std = nn.Linear(last_layer_dim, action_dim-3)  # type: ignore[assignment]
+            self.mu = nn.Linear(last_layer_dim, action_dim)
+            self.log_std = nn.Linear(last_layer_dim, action_dim)  # type: ignore[assignment]
 
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
@@ -158,9 +158,8 @@ class Actor(BasePolicy):
             Mean, standard deviation and optional keyword arguments.
         """
         
-        features = self.extract_features(obs, self.features_extractor) # (B, 1088, N)
-        features = features.transpose(1, 2) # (B, N, 1088)
-        latent_pi = self.latent_pi(features) # (B, N, 128)
+        features = self.extract_features(obs, self.features_extractor) # (B, N, 1088)
+        latent_pi = self.latent_pi(features) # mlp (B, N, 128)
         mean_actions = self.mu(latent_pi) # (B, N, 7)
 
         if self.use_sde:
@@ -174,25 +173,41 @@ class Actor(BasePolicy):
     
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
         
-        mean_actions, log_std, kwargs = self.get_action_dist_params(obs) 
+        mean_actions, log_std, kwargs = self.get_action_dist_params(obs) # (B, N, 7)
         # Note: the action is squashed
-        off_params = self.action_dist.actions_from_params(mean_actions, log_std, 
-                                                          deterministic=deterministic, **kwargs) # (B, N, 7)
-        obs = obs.transpose(1, 2) # (B, N ,3)
-        action_params = th.cat((obs, off_params), dim=2) # (B, N, 10)
-        return action_params
+        params = self.action_dist.actions_from_params(mean_actions, log_std, deterministic=deterministic, **kwargs)
+        norm_params = self.to_normal_param(obs, params) # (B, N, 7)
+        
+        return norm_params
 
     
     def action_log_prob(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
 
-        mean_actions, log_std, kwargs = self.get_action_dist_params(obs) # (B, N, 7) (B, N, 7)
+        mean_actions, log_std, kwargs = self.get_action_dist_params(obs) # (B, N, 7)
         # return action and associated log prob
-        anchor_offsets, log_prob = self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs) # (B, N, 7) (B, N, 1)
-        return anchor_offsets, log_prob
+        params, log_prob = self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs) # (B, N, 7) (B, N, 1)
+        norm_params = self.to_normal_param(obs, params)
+        return norm_params, log_prob
 
     
     def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
         return self(observation, deterministic)
+
+
+    def to_normal_param(self, obs, tanh_params):
+        
+        device = tanh_params.device
+        low = th.tensor(self.action_space.low).to(device)
+        high = th.tensor(self.action_space.high).to(device)
+        untanh_params = low + (0.5 * (tanh_params + 1.0) * (high-low)) # (B, N, 7)
+        
+        axis_y_norm = th.norm(untanh_params[:,:,3:6], keepdim=True, dim=-1) # (B, N, 1)
+        axis_y_unit = untanh_params[:,:,3:6] / axis_y_norm
+        tcp = untanh_params[:,:,:3] + obs[:,:,:3]
+        rot_radian = untanh_params[:,:,-1].unsqueeze(-1)
+        normal_params = th.cat((tcp, axis_y_unit, rot_radian), dim=-1) # (B, N, 7)
+        
+        return normal_params
 
 
 
@@ -247,6 +262,7 @@ class SACPolicy(BasePolicy):
         optimizer_kwargs: Optional[Dict[str, Any]] = None,
         n_critics: int = 2,
         share_features_extractor: bool = False,
+        boltzmann_beta=0.1,
     ):
         super().__init__(
             observation_space,
@@ -293,7 +309,7 @@ class SACPolicy(BasePolicy):
         )
 
         self.share_features_extractor = share_features_extractor
-
+        self.boltzmann_beta = boltzmann_beta
         self._build(lr_schedule)
 
 
@@ -374,18 +390,21 @@ class SACPolicy(BasePolicy):
         return ContinuousCritic(**critic_kwargs).to(self.device)
 
 
-    def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
+    def forward(self, obs, deterministic=False):
         
-        actions_pointwise = self.actor(obs, deterministic=deterministic) # (B, N, 10)
-        q_values = th.cat(self.critic(obs, actions_pointwise), dim=2) # (B, N, 2)
-        min_q_values = th.min(q_values, dim=2).values # (B, N)
-        q_values_distribution = th.nn.functional.softmax(min_q_values, dim=1) # (B, N)
-        sample_anchor_index = q_values_distribution.multinomial(num_samples=1) # (B, 1)
-        pts = obs.transpose(1, 2) # (B, N, 3)
-        sample_anchor = th.gather(pts, 1, sample_anchor_index.unsqueeze(-1).expand(-1, -1, 3)).squeeze(1) # (B, 3)
-        sample_anchor_offsets = th.gather(actions_pointwise, 1, sample_anchor_index.unsqueeze(-1).expand(-1, -1, 7)).squeeze(1) # (B, 7)
-        soft_anchor_params = th.cat((sample_anchor, sample_anchor_offsets), dim=1) # (B, 10)
-        return soft_anchor_params
+        params_pointwise = self.actor(obs, deterministic=deterministic) # (B, N, 7)
+        q_values = th.cat(self.critic(obs, params_pointwise), dim=2)
+        min_q_values = th.min(q_values, dim=-1).values # (B, N)
+        q_values_distribution = th.nn.functional.softmax(min_q_values/self.boltzmann_beta, dim=-1) # (B, N)
+        if deterministic == True:
+            anchor_index = th.max(q_values_distribution, dim=1, keepdim=True).indices # (B, 1)
+        else:
+            anchor_index = q_values_distribution.multinomial(num_samples=1) # (B, 1)
+        
+        action_params = th.gather(params_pointwise, 1, anchor_index.unsqueeze(-1).expand(-1, -1, 7)).squeeze(1) # (B, 7)
+        action_params = th.cat((action_params,anchor_index), dim=-1) # (B, 8)
+        
+        return action_params
 
 
     def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:

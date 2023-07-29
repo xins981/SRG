@@ -6,12 +6,10 @@ import warnings
 from abc import ABC, abstractmethod
 from functools import partial
 from typing import Any, Dict, List, Optional, Tuple, Type, TypeVar, Union
-
 import numpy as np
 import torch as th
 from gymnasium import spaces
 from torch import nn
-
 from stable_baselines3.common.distributions import (
     BernoulliDistribution,
     CategoricalDistribution,
@@ -359,22 +357,23 @@ class BasePolicy(BaseModel, ABC):
         with th.no_grad():
             actions = self._predict(observation, deterministic=deterministic)
         # Convert to numpy, and reshape to the original action shape
-        actions = actions.cpu().numpy().reshape((-1, *self.action_space.shape)) # (B, 10)
+        actions = actions.cpu().numpy().reshape((-1, np.prod(self.action_space.shape)+1)) # (B, 8)
 
-        if isinstance(self.action_space, spaces.Box):
-            if self.squash_output:
-                # Rescale to proper domain when using squashing. the actions from squash(tanh layer) are normalized (-1, 1)
-                actions = self.unscale_action(actions)
-            else:
-                # Actions could be on arbitrary scale, so clip the actions to avoid
-                # out of bound error (e.g. if sampling from a Gaussian distribution)
-                anchor_offsets = actions[:,3:]
-                cliped_anchor_offsets = np.clip(anchor_offsets, self.action_space.low[3:], self.action_space.high[3:])
-                actions[:,3:] = cliped_anchor_offsets
+        # if isinstance(self.action_space, spaces.Box):
+        #     if self.squash_output:
+        #         # Rescale to proper domain when using squashing. the actions from squash(tanh layer) are normalized (-1, 1)
+        #         actions = self.unscale_action(actions)
+        #     else:
+        #         # Actions could be on arbitrary scale, so clip the actions to avoid
+        #         # out of bound error (e.g. if sampling from a Gaussian distribution)
+        #         anchor_offsets = actions[:,3:]
+        #         cliped_anchor_offsets = np.clip(anchor_offsets, self.action_space.low[3:], self.action_space.high[3:])
+        #         actions[:,3:] = cliped_anchor_offsets
 
         # Remove batch dimension if needed
         if not vectorized_env:
             actions = actions.squeeze(axis=0)
+        
         return actions, state
 
 
@@ -922,6 +921,7 @@ class ContinuousCritic(BaseModel):
         between the actor and the critic (this saves computation time)
     """
     
+    
     def __init__(
         self,
         observation_space: spaces.Space,
@@ -947,7 +947,7 @@ class ContinuousCritic(BaseModel):
         self.n_critics = n_critics
         self.q_networks = []
         for idx in range(n_critics):
-            q_net = create_mlp(features_dim + action_dim, 1, net_arch, activation_fn)
+            q_net = create_mlp(features_dim+action_dim, 1, net_arch, activation_fn)
             q_net = nn.Sequential(*q_net)
             self.add_module(f"qf{idx}", q_net)
             self.q_networks.append(q_net)
@@ -957,19 +957,18 @@ class ContinuousCritic(BaseModel):
         # Learn the features extractor using the policy loss only
         # when the features_extractor is shared with the actor
         with th.set_grad_enabled(not self.share_features_extractor):
-            features = self.extract_features(obs, self.features_extractor) # (B, 1088, N)
-        features = features.transpose(1, 2) # (B, N, 1088)
-        if len(actions.shape) < 3:
-            point_cloud = obs.transpose(1, 2) 
-            current_point = actions[:, :3].unsqueeze(1) # (B, 1, 3)
-            distances = th.norm(point_cloud-current_point, dim=2) # (B, N)
-            action_index = th.argmin(distances, dim=1, keepdim=True) # (B, 1)
-            action_index = action_index.unsqueeze(-1).expand(-1, -1, 1088)
-            features = th.gather(features, 1, action_index).squeeze(1)
-            qvalue_input = th.cat([features, actions], dim=1) # (B, 1098)
+            features = self.extract_features(obs, self.features_extractor) # (B, N, 1088)
+        
+        if len(actions.shape) < 3: # (B, 8)
+            anchor_index = actions[:,np.prod(self.action_space.shape)].unsqueeze(-1) # (B, 1)
+            anchor_index = anchor_index.to(th.int64)
+            anchor_index = anchor_index.unsqueeze(-1).expand(-1, -1, self.features_extractor.features_dim)
+            actions = actions[:,:np.prod(self.action_space.shape)]
+            features = th.gather(features, 1, anchor_index).squeeze(1)
+            qvalue_input = th.cat([features, actions], dim=1) # (B, features_dim + 7)
             return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, 1)
         else:
-            qvalue_input = th.cat([features, actions], dim=2) # (B, N, 1098)
+            qvalue_input = th.cat([features, actions], dim=-1) # (B, N, 1098)
             return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, N, 1)
 
 
@@ -980,7 +979,10 @@ class ContinuousCritic(BaseModel):
         (e.g. when updating the policy in TD3).
         """
         with th.no_grad():
-            features = self.extract_features(obs, self.features_extractor)
-        features = features.transpose(1, 2) # (B, N, 1088)
+            features = self.extract_features(obs, self.features_extractor) # (B, N, 1088)
         qvalue_input = th.cat([features, actions], dim=2) # (B, N, 1095)
         return self.q_networks[0](qvalue_input)
+
+
+    
+

@@ -1,5 +1,5 @@
 import glob
-import os
+import os, time, datetime
 import platform
 import random
 import re
@@ -199,18 +199,17 @@ def configure_logger(
         raise ImportError("Trying to log data to tensorboard but tensorboard is not installed.")
 
     if tensorboard_log is not None and SummaryWriter is not None:
-        latest_run_id = get_latest_run_id(tensorboard_log, tb_log_name)
-        if not reset_num_timesteps:
-            # Continue training in the same directory
-            latest_run_id -= 1
-        save_path = os.path.join(tensorboard_log, f"{tb_log_name}_{latest_run_id + 1}")
+        # latest_run_id = get_latest_run_id(tensorboard_log, tb_log_name)
+        # if not reset_num_timesteps:
+        #     # Continue training in the same directory
+        #     latest_run_id -= 1
         if verbose >= 1:
             format_strings = ["stdout", "tensorboard"]
         else:
             format_strings = ["tensorboard"]
     elif verbose == 0:
         format_strings = [""]
-    return configure(save_path, format_strings=format_strings)
+    return configure(tensorboard_log, format_strings=format_strings)
 
 
 def check_for_correct_spaces(env: GymEnv, observation_space: spaces.Space, action_space: spaces.Space) -> None:

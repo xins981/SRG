@@ -17,17 +17,18 @@ import open3d as o3d
 
 class Environment(gym.Env):
 
-    def __init__(self, vis=False):
+    def __init__(self, vis=False, observation_shape=(512, 3), episode_timestemp=5, reward_scale=10):
 
         self.debug_frame = dict()
-        self.workspace_limits = np.asarray([[0.304, 0.752], [-0.02, 0.428], [0, 0.4]])
-        anchor_offset_limits = self.workspace_limits * 100
+        self.workspace = np.asarray([[0.304, 0.752], 
+                                     [-0.02, 0.428], 
+                                     [0, 0.4]])
         
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=(3, 5000), dtype=np.float16)
-        # action_params: [:3] anchor m; [3:6] anchor offset cm; [6:9] axis_y; [9] approach angle;
-        action_down = np.array([-np.inf, -np.inf, -np.inf, anchor_offset_limits[0,0], anchor_offset_limits[1,0], anchor_offset_limits[2,0], 0, 0, 0, -np.pi/2])
-        action_up = np.array([np.inf, np.inf, np.inf, anchor_offset_limits[0,1], anchor_offset_limits[1,1], anchor_offset_limits[2,1], 1, 1, 1, np.pi/2])
-        self.action_space = spaces.Box(action_down, action_up, shape=(10,), dtype=np.float16)
+        approach_radian = np.pi / 2
+        action_min = np.array([-0.05, -0.05, -0.05, -1, -1, -1, -approach_radian])
+        action_max = np.array([0.05, 0.05, 0.05, 1, 1, 1, approach_radian])
+        self.observation_space = spaces.Box(-np.inf, np.inf, shape=observation_shape)
+        self.action_space = spaces.Box(action_min, action_max, shape=(7,))
 
         # Connect to simulator
         self._vis = vis
@@ -39,7 +40,7 @@ class Environment(gym.Env):
         self.mesh_to_urdf = {}
 
         self.env_body = dict()
-        plane_id = self.sim.loadURDF("plane100.urdf", useMaximalCoordinates=True)
+        plane_id = self.sim.loadURDF("plane.urdf", useMaximalCoordinates=True)
         self.env_body['plane'] = plane_id
         work_floor_id = self.sim.loadURDF('resources/objects/work_floor.urdf', basePosition=[0.528, 0.204, 0], useMaximalCoordinates=True)
         self.env_body['work_floor'] = work_floor_id
@@ -89,25 +90,27 @@ class Environment(gym.Env):
         
         super().reset(seed=seed, options=options)
         
+        self._num_step = 0
         self.gripper.reset()
         
         self._clean_objects()
-        drop_x = (self.workspace_limits[0][1] - self.workspace_limits[0][0] - 0.2) * np.random.random_sample() + self.workspace_limits[0][0] + 0.1
-        drop_y = (self.workspace_limits[1][1] - self.workspace_limits[1][0] - 0.2) * np.random.random_sample() + self.workspace_limits[1][0] + 0.1
+        drop_x = (self.workspace[0][1] - self.workspace[0][0] - 0.2) * np.random.random_sample() + self.workspace[0][0] + 0.1
+        drop_y = (self.workspace[1][1] - self.workspace[1][0] - 0.2) * np.random.random_sample() + self.workspace[1][0] + 0.1
         self.object_in_world = np.eye(4)
         self.object_in_world[:3,3] = [drop_x, drop_y, 0.20]
         add_success = self._add_objects()
         while add_success == False:
             add_success = self._add_objects()
 
-        observation = self._get_obs()
+        observation = self._get_observation()
         
         return observation, {}
 
 
-    def step(self, action_param):
+    def step(self, action_params):
         
-        self.grasp_matrix_in_camera = self._param_to_grasp(grasp_param=action_param)
+        self._num_step += 1
+        self.grasp_matrix_in_camera = utils.to_grasp(action_params)
         grasp_in_world = self.camera.view_matrix @ self.grasp_matrix_in_camera
         gripper_in_world = grasp_in_world @ self.gripper.gripper_in_grasp
 
@@ -120,18 +123,23 @@ class Environment(gym.Env):
         contact_pts_gripper_obj = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.obj_ids[0])
         contact_pts_gripper_plane = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.env_body['plane'])
         if len(contact_pts_gripper_obj) != 0 or len(contact_pts_gripper_plane) != 0: # gripper invoke target object
-            terminated = False
+            grasp_success = False
         else:
             self.gripper.close()
-            terminated = self._is_grasp_success()
+            grasp_success = self._is_grasp_success()
 
-        if terminated == False:
+        if grasp_success == False:
             self.pb_utils.set_body_pose_in_world(self.obj_ids[0], self.object_in_world)
             self.pb_utils.set_body_pose_in_world(self.gripper.id, np.eye(4))
 
-        observation = self._get_obs()
+        if self._num_step < 5 and grasp_success == False:
+            terminated = False
+        else:
+            terminated = True
+
+        observation = self._get_observation()
         info = {}
-        reward = int(terminated)
+        reward = int(grasp_success) * 10
 
         return observation, reward, terminated, False, info
 
@@ -157,9 +165,9 @@ class Environment(gym.Env):
         position_x = ob_in_world[0,3]
         position_y = ob_in_world[1,3]
         position_z = ob_in_world[2,3]
-        if  position_x > self.workspace_limits[0,1] or position_x < self.workspace_limits[0,0] or\
-            position_y > self.workspace_limits[1,1] or position_y > self.workspace_limits[1,1] or\
-            position_z > self.workspace_limits[2,1] or position_z > self.workspace_limits[2,1]:
+        if  position_x > self.workspace[0,1] or position_x < self.workspace[0,0] or\
+            position_y > self.workspace[1,1] or position_y > self.workspace[1,1] or\
+            position_z > self.workspace[2,1] or position_z > self.workspace[2,1]:
             return True
         else:
             return False
@@ -203,8 +211,8 @@ class Environment(gym.Env):
         # for object_idx in self.obj_mesh_ind:
         curr_mesh_file = f'resources/objects/blocks/{4}.obj'
         
-        # drop_x = (self.workspace_limits[0][1] - self.workspace_limits[0][0] - 0.2) * np.random.random_sample() + self.workspace_limits[0][0] + 0.1
-        # drop_y = (self.workspace_limits[1][1] - self.workspace_limits[1][0] - 0.2) * np.random.random_sample() + self.workspace_limits[1][0] + 0.1
+        # drop_x = (self.workspace[0][1] - self.workspace[0][0] - 0.2) * np.random.random_sample() + self.workspace[0][0] + 0.1
+        # drop_y = (self.workspace[1][1] - self.workspace[1][0] - 0.2) * np.random.random_sample() + self.workspace[1][0] + 0.1
         # R = tf.random_rotation_matrix(np.random.rand(3))
         # object_in_world = np.eye(4)
         # object_in_world[:3,3] = [drop_x, drop_y, 0.15]
@@ -226,23 +234,30 @@ class Environment(gym.Env):
         self.obj_ids.remove(obj_id)
 
 
-    def _get_obs(self):
-            
+    def _get_observation(self):
+
         rgb, depth, seg = self.camera.shot()
+        pts_scene = utils.depth2xyzmap(depth, self.camera._k)
         bg_mask = depth<0.1
         for name, id in self.env_body.items():
             bg_mask[seg==id] = 1
-        pts = utils.depth2xyzmap(depth, self.camera._k)
-        pts_no_bg = pts[bg_mask==0].reshape(-1,3) # (N,3)
-        if pts_no_bg.shape[0] > self.observation_space.shape[1]:
-            num_pts = self.observation_space.shape[1]
-            downsample_indxs = utils.farthest_point_sample(pts=pts_no_bg, npoint=num_pts)
-            obs = pts_no_bg[downsample_indxs]
+        pts_obj = pts_scene[bg_mask==False]
+        num_sapmple_pts = self.observation_space.shape[0]
+        num_obj_pts = len(pts_obj)
+        if num_obj_pts == 0:
+            observation = np.zeros([num_sapmple_pts, 3])
+        elif num_obj_pts < num_sapmple_pts:
+            num_padding_pts = num_sapmple_pts - num_obj_pts
+            padding_pts = np.repeat([pts_obj[0]], num_padding_pts, axis=0)
+            observation = np.concatenate([pts_obj, padding_pts], axis=0)
         else:
-            obs = np.zeros((self.observation_space.shape[1], 3))
-        obs = obs.T
+            observation = pts_obj[np.random.permutation(num_obj_pts)[:num_sapmple_pts]]
         
-        return obs
+        return observation
+
+
+    def _get_reward(self):
+        pass
 
 
     def _clean_objects(self):

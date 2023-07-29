@@ -8,17 +8,8 @@ from stable_baselines3.common import type_aliases
 from stable_baselines3.common.vec_env import DummyVecEnv, VecEnv, VecMonitor, is_vecenv_wrapped
 
 
-def evaluate_policy(
-    model: "type_aliases.PolicyPredictor",
-    env: Union[gym.Env, VecEnv],
-    n_eval_episodes: int = 10,
-    deterministic: bool = True,
-    render: bool = False,
-    callback: Optional[Callable[[Dict[str, Any], Dict[str, Any]], None]] = None,
-    reward_threshold: Optional[float] = None,
-    return_episode_rewards: bool = False,
-    warn: bool = True,
-) -> Union[Tuple[float, float], Tuple[List[float], List[int]]]:
+def evaluate_policy(model, env, n_eval_episodes=10, deterministic=True, render=False, callback=None, 
+                    reward_threshold=None, return_episode_rewards=False, warn=True):
     
     """ Runs policy for ``n_eval_episodes`` episodes and returns average reward.
     If a vector env is passed in, this divides the episodes to evaluate onto the

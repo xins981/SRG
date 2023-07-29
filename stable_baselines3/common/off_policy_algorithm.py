@@ -20,7 +20,7 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Rollout
 from stable_baselines3.common.utils import safe_mean, should_collect_more_steps
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
-
+import yaml
 SelfOffPolicyAlgorithm = TypeVar("SelfOffPolicyAlgorithm", bound="OffPolicyAlgorithm")
 
 
@@ -131,7 +131,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         self.gradient_steps = gradient_steps
         self.action_noise = action_noise
         self.optimize_memory_usage = optimize_memory_usage
-        self.replay_buffer: Optional[ReplayBuffer] = None
+        self.replay_buffer = None
         self.replay_buffer_class = replay_buffer_class
         self.replay_buffer_kwargs = replay_buffer_kwargs or {}
         self._episode_storage = None
@@ -330,6 +330,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 # Special case when the user passes `gradient_steps=0`
                 if gradient_steps > 0:
                     self.train(batch_size=self.batch_size, gradient_steps=gradient_steps)
+            
+            if self.num_timesteps % self.blm_update_step == 0 and self.policy.boltzmann_beta > self.blm_end:
+                self.policy.boltzmann_beta *= 0.65
 
         callback.on_training_end()
 
@@ -364,42 +367,53 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         
         # Select action randomly or according to policy
         if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup):
+            
             # Warmup phase
             unscaled_action = []
+            as_high = self.action_space.high
+            as_low = self.action_space.low
             for i in range(n_envs):
-                action_point_ind = np.random.randint(0, self.observation_space.shape[1])
-                action_point = self._last_obs[i, :, action_point_ind]
-                action_off = self.action_space.sample()
-                action_off = action_off[3:] # drop random anchor coordinates
-                action_param = np.concatenate((action_point, action_off))
-                unscaled_action.append(action_param)
-            unscaled_action = np.array(unscaled_action)
+                anchor_ind = np.array([np.random.randint(0, self.observation_space.shape[1])])
+                anchor = self._last_obs[i, anchor_ind, :]
+                params = self.action_space.sample()
+                action = as_low + (0.5 * (params + 1.0) * (as_high - as_low)) # (7, )
+                axis_y_norm = np.linalg.norm(action[3:6])
+                action[3:6] /= axis_y_norm
+                action[:3] = action[:3] + anchor
+                action = np.concatenate((action,anchor_ind))
+                unscaled_action.append(action)
+            unscaled_action = np.array(unscaled_action) # (B, 8)
         else:
+
             # Note: when using continuous actions,
             # we assume that the policy uses tanh to scale the action
             # We use non-deterministic action in the case of SAC, for TD3, it does not matter
-            unscaled_action, _ = self.predict(self._last_obs) # （B, N, 7)
+            unscaled_action, _ = self.predict(self._last_obs, deterministic=False) # （B, 8)
 
         # Rescale the action from [low, high] to [-1, 1]
-        if isinstance(self.action_space, spaces.Box):
-            scaled_action = self.policy.scale_action(unscaled_action)
+        # if isinstance(self.action_space, spaces.Box):
+        #     scaled_action = self.policy.scale_action(unscaled_action)
 
-            # Add noise to the action (improve exploration)
-            if action_noise is not None:
-                scaled_action = np.clip(scaled_action + action_noise(), -1, 1)
+        #     # Add noise to the action (improve exploration)
+        #     if action_noise is not None:
+        #         scaled_action = np.clip(scaled_action + action_noise(), -1, 1)
 
-            # We store the scaled action in the buffer
-            buffer_action = scaled_action
-            action = self.policy.unscale_action(scaled_action)
-        else:
-            # Discrete case, no need to normalize or clip
-            buffer_action = unscaled_action
-            action = buffer_action
+        #     # We store the scaled action in the buffer
+        #     buffer_action = scaled_action
+        #     action = self.policy.unscale_action(scaled_action)
+        # else:
+        #     # Discrete case, no need to normalize or clip
+        #     buffer_action = unscaled_action
+        #     action = buffer_action
+
+        buffer_action = unscaled_action
+        action = buffer_action[:,:np.prod(self.action_space.shape)]
         
         return action, buffer_action
 
 
     def _dump_logs(self) -> None:
+        
         """
         Write log.
         """
@@ -480,14 +494,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                     if self._vec_normalize_env is not None:
                         next_obs[i] = self._vec_normalize_env.unnormalize_obs(next_obs[i, :])
 
-        replay_buffer.add(
-            self._last_original_obs,
-            next_obs,
-            buffer_action,
-            reward_,
-            dones,
-            infos,
-        )
+        replay_buffer.add(self._last_original_obs, next_obs, buffer_action, reward_, dones, infos)
 
         self._last_obs = new_obs
         # Save the unnormalized observation
@@ -551,7 +558,6 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 self.actor.reset_noise(env.num_envs)
 
             # Select action randomly or according to policy
-            # actions: [low, high]; buffer_actions: scale [-1, 1];
             actions, buffer_actions = self._sample_action(learning_starts, action_noise, env.num_envs) # (B, 10)
 
             # Rescale and perform action

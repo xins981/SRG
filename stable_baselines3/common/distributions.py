@@ -118,7 +118,7 @@ def sum_independent_dims(tensor: th.Tensor) -> th.Tensor:
     """
 
     if len(tensor.shape) > 2:
-        tensor = tensor.sum(dim=2)
+        tensor = tensor.sum(dim=-1)
     else:
         tensor = tensor.sum()
     return tensor
@@ -237,10 +237,10 @@ class SquashedDiagGaussianDistribution(DiagGaussianDistribution):
             gaussian_actions = TanhBijector.inverse(actions)
 
         # Log likelihood for a Gaussian distribution
-        log_prob = super().log_prob(gaussian_actions) # (B, N, 1)
+        log_prob = super().log_prob(gaussian_actions) # (B, N)
         # Squash correction (from original SAC implementation)
         # this comes from the fact that tanh is bijective and differentiable
-        log_prob -= th.sum(th.log(1 - actions**2 + self.epsilon), dim=2) # (B, N, 1)
+        log_prob -= th.sum(th.log(1 - actions**2 + self.epsilon), dim=-1) # (B, N)
         return log_prob
 
     def entropy(self) -> Optional[th.Tensor]:
@@ -259,9 +259,14 @@ class SquashedDiagGaussianDistribution(DiagGaussianDistribution):
         return th.tanh(self.gaussian_actions)
 
     def log_prob_from_params(self, mean_actions: th.Tensor, log_std: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
+        
         action = self.actions_from_params(mean_actions, log_std) # (B, N, 7)
         log_prob = self.log_prob(action, self.gaussian_actions)
         return action, log_prob
+
+
+
+
 
 
 class CategoricalDistribution(Distribution):

@@ -11,7 +11,6 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Schedul
 from stable_baselines3.common.utils import get_parameters_by_name, polyak_update
 from stable_baselines3.sac.policies import Actor, MlpPolicy, SACPolicy
 
-
 SelfSAC = TypeVar("SelfSAC", bound="SAC")
 
 
@@ -52,7 +51,8 @@ class SAC(OffPolicyAlgorithm):
         seed: Optional[int] = None,
         device: Union[th.device, str] = "auto",
         _init_setup_model: bool = True,
-        location_temperature = 0.1
+        blm_update_step=5000,
+        blm_end=0.1,
     ):
         super().__init__(
             policy,
@@ -89,7 +89,9 @@ class SAC(OffPolicyAlgorithm):
         self.ent_coef = ent_coef
         self.target_update_interval = target_update_interval
         self.ent_coef_optimizer: Optional[th.optim.Adam] = None
-        self.location_temperature = location_temperature
+
+        self.blm_update_step = blm_update_step
+        self.blm_end = blm_end
         
         if _init_setup_model:
             self._setup_model()
@@ -163,59 +165,41 @@ class SAC(OffPolicyAlgorithm):
             if self.use_sde:
                 self.actor.reset_noise()
 
-            # Action by the current actor for the sampled state
-            new_anchor_offsets, new_log_prob = self.actor.action_log_prob(replay_data.observations)  # (B, N, 7), (B, N)
-            with th.no_grad():
-                new_anchor = replay_data.observations.transpose(1, 2) # (B, N, 3)
-                new_action = th.cat((new_anchor, new_anchor_offsets), dim=2) # (B, N, 10)
-                new_q_values = th.cat(self.critic_target(replay_data.observations, new_action), dim=2)
-                new_q_values = th.min(new_q_values, dim=2).values # (B, N)
-                new_location_distribution = th.nn.functional.softmax(new_q_values/self.location_temperature, dim=1) # (B, N)
-
-            ent_coef_loss = None
-            if self.ent_coef_optimizer is not None and self.log_ent_coef is not None:
-                # Important: detach the variable from the graph
-                # so we don't change it with other losses
-                # see https://github.com/rail-berkeley/softlearning/issues/60
+            # Action by the current actor for the sampled state; new_params:(B, N, 7), new_log_prob:(B, N).
+            new_params, new_log_prob = self.actor.action_log_prob(replay_data.observations)
+            
+            if self.log_ent_coef is not None:
                 ent_coef = th.exp(self.log_ent_coef.detach())
-                ent_coef_loss = -(self.log_ent_coef * (th.sum(new_location_distribution * (new_log_prob + self.target_entropy), dim=1)).detach()).mean()
-                ent_coef_losses.append(ent_coef_loss.item())
             else:
                 ent_coef = self.ent_coef_tensor
 
             ent_coefs.append(ent_coef.item())
 
-            # Optimize entropy coefficient, also called
-            # entropy temperature or alpha in the paper
-            if ent_coef_loss is not None and self.ent_coef_optimizer is not None:
-                self.ent_coef_optimizer.zero_grad()
-                ent_coef_loss.backward()
-                self.ent_coef_optimizer.step()
-
             with th.no_grad():
-                # Select action according to policy
-                next_anchor_offsets, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)  # (B, N, 7) (B, N, 1)
-                next_anchor = replay_data.next_observations.transpose(1, 2)
-                next_actions = th.cat((next_anchor, next_anchor_offsets), dim=2) # (B, N, 10)
+                # Select action according to policy; next_params:(B, N, 7), next_log_prob:(B, N).
+                next_params, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)
                 # Compute the next Q values: min over all critics targets
-                next_q_values = th.cat(self.critic_target(replay_data.next_observations, next_actions), dim=2)
-                next_q_values = th.min(next_q_values, dim=2).values # (B, N)
-                next_location_distribution = th.nn.functional.softmax(next_q_values/self.location_temperature, dim=1) # (B, N)
-
+                next_q = th.cat(self.critic_target(replay_data.next_observations, next_params), dim=2).min(dim=2).values # (B, N)
+                next_location_prob = th.nn.functional.softmax(next_q/self.policy.boltzmann_beta, dim=1) # (B, N)
+                next_anchor_index = next_location_prob.multinomial(num_samples=1) # (B, 1)
+                next_action_location_prob = th.gather(next_location_prob.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+                next_action_log_prob = th.gather(next_log_prob.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+                next_joint_log_prob = th.log(next_action_location_prob) + next_action_log_prob # (B, )
+                next_action_q = th.gather(next_q.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+                
                 # add entropy term
-                next_q_values = next_q_values - ent_coef * next_log_prob # (B, N)
-                next_q_values = th.sum(next_location_distribution * next_q_values, dim=1, keepdim=True) # (B, 1)
-
-                # td error + entropy term
-                target_q_values = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_values # (B, 1)
+                next_q_value_with_entropy = next_action_q - ent_coef * next_joint_log_prob # (B, )
+                
+                # td error + entropy term; rewards:(B, 1), dones:(B, 1).
+                target_q = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_value_with_entropy.unsqueeze(-1)
 
             # Get current Q-values estimates for each critic network
             # using action from the replay buffer
-            current_actions = replay_data.actions # (B, 10)
-            current_q_values = self.critic(replay_data.observations, current_actions) # 2 *（B, 1)
+            self.critic.requires_grad_(True)
+            current_q = self.critic(replay_data.observations, replay_data.actions) # 2 *（B, 1)
             
             # Compute critic loss
-            critic_loss = 0.5 * sum(F.mse_loss(current_q, target_q_values) for current_q in current_q_values)
+            critic_loss = 0.5 * sum(F.mse_loss(pred_q, target_q) for pred_q in current_q)
             assert isinstance(critic_loss, th.Tensor)  # for type checker
             critic_losses.append(critic_loss.item())  # type: ignore[union-attr]
 
@@ -227,16 +211,36 @@ class SAC(OffPolicyAlgorithm):
             # Compute actor loss
             # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
             # Min over all critic networks
-            
-            new_q_values = ent_coef * new_log_prob - new_q_values # (B, N)
-            new_q_values = th.sum(new_location_distribution * new_q_values, dim=1, keepdim=True) # (B, 1)
-            actor_loss = th.mean(new_q_values)
+            self.critic.requires_grad_(False)
+            new_q = th.cat(self.critic(replay_data.observations, new_params), dim=2).min(dim=2).values # (B, N)
+            new_location_prob = th.nn.functional.softmax(new_q/self.policy.boltzmann_beta, dim=1) # (B, N)
+            new_anchor_index = new_location_prob.multinomial(num_samples=1) # (B, 1)
+            new_action_location_prob = th.gather(new_location_prob.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+            new_action_log_prob = th.gather(new_log_prob.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+            new_joint_log_prob = th.log(new_action_location_prob) + new_action_log_prob # (B, )
+            new_action_q = th.gather(new_q.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+            actor_loss = (ent_coef * new_joint_log_prob - new_action_q).mean()
             actor_losses.append(actor_loss.item())
-
+           
             # Optimize the actor
             self.actor.optimizer.zero_grad()
             actor_loss.backward()
             self.actor.optimizer.step()
+
+            ent_coef_loss = None
+            if self.ent_coef_optimizer is not None and self.log_ent_coef is not None:
+                # Important: detach the variable from the graph
+                # so we don't change it with other losses
+                # see https://github.com/rail-berkeley/softlearning/issues/60
+                ent_coef_loss = -(self.log_ent_coef * (new_joint_log_prob + self.target_entropy).detach()).mean()
+                ent_coef_losses.append(ent_coef_loss.item())
+
+            # Optimize entropy coefficient, also called
+            # entropy temperature or alpha in the paper
+            if ent_coef_loss is not None and self.ent_coef_optimizer is not None:
+                self.ent_coef_optimizer.zero_grad()
+                ent_coef_loss.backward()
+                self.ent_coef_optimizer.step()
 
             # Update target networks
             if gradient_step % self.target_update_interval == 0:
@@ -250,6 +254,7 @@ class SAC(OffPolicyAlgorithm):
         self.logger.record("train/ent_coef", np.mean(ent_coefs))
         self.logger.record("train/actor_loss", np.mean(actor_losses))
         self.logger.record("train/critic_loss", np.mean(critic_losses))
+        self.logger.record("train/boltzmann_coef", self.policy.boltzmann_beta)
         if len(ent_coef_losses) > 0:
             self.logger.record("train/ent_coef_loss", np.mean(ent_coef_losses))
 
@@ -264,7 +269,7 @@ class SAC(OffPolicyAlgorithm):
             reset_num_timesteps=reset_num_timesteps,
             progress_bar=progress_bar,
         )
-
+    
     
     def _excluded_save_params(self) -> List[str]:
         return super()._excluded_save_params() + ["actor", "critic", "critic_target"]  # noqa: RUF005
@@ -278,3 +283,4 @@ class SAC(OffPolicyAlgorithm):
         else:
             saved_pytorch_variables = ["ent_coef_tensor"]
         return state_dicts, saved_pytorch_variables
+

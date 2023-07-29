@@ -6,7 +6,7 @@ from typing import Any, Callable, Dict, List, Optional, Union
 import gymnasium as gym
 import numpy as np
 
-from stable_baselines3.common.logger import Logger
+from stable_baselines3.common.logger import Logger, HParam
 
 try:
     from tqdm import TqdmExperimentalWarning
@@ -334,13 +334,11 @@ class EvalCallback(EventCallback):
       To account for that, you can use ``eval_freq = max(eval_freq // n_envs, 1)``
 
     :param eval_env: The environment used for initialization
-    :param callback_on_new_best: Callback to trigger
-        when there is a new best model according to the ``mean_reward``
+    :param callback_on_new_best: Callback to trigger when there is a new best model according to the ``mean_reward``
     :param callback_after_eval: Callback to trigger after every evaluation
     :param n_eval_episodes: The number of episodes to test the agent
     :param eval_freq: Evaluate the agent every ``eval_freq`` call of the callback.
-    :param log_path: Path to a folder where the evaluations (``evaluations.npz``)
-        will be saved. It will be updated at each evaluation.
+    :param log_path: Path to a folder where the evaluations (``evaluations.npz``) will be saved. It will be updated at each evaluation.
     :param best_model_save_path: Path to a folder where the best model
         according to performance on the eval env will be saved.
     :param deterministic: Whether the evaluation should
@@ -690,3 +688,36 @@ class ProgressBarCallback(BaseCallback):
         # Flush and close progress bar
         self.pbar.refresh()
         self.pbar.close()
+
+
+class HParamCallback(BaseCallback):
+
+    def _on_training_start(self):
+        hparam_dict = {
+            "total timesteps": self.num_timesteps,
+            "num of env": self.model.n_envs,
+            "buffer size": self.model.buffer_size,
+            "learning start": self.model.learning_starts,
+            "train frequency": self.model.train_freq.frequency,
+            "learning rate": self.model.learning_rate,
+            "gamma": self.model.gamma,
+            "tau": self.model.tau,
+            "boltzmann beta": self.model.policy.boltzmann_beta,
+            "gradient step": self.model.gradient_steps,
+            "batch size": self.model.batch_size,
+            "feature dim": self.model.policy_kwargs["features_extractor_kwargs"]["features_dim"],
+            "net arch": str(self.model.policy_kwargs["net_arch"]),
+        }
+        # define the metrics that will appear in the `HPARAMS` Tensorboard tab by referencing their tag
+        # Tensorbaord will find & display metrics from the `SCALARS` tab
+        metric_dict = {
+            "eval/mean_reward": 0,
+        }
+        self.logger.record(
+            "hparams",
+            HParam(hparam_dict, metric_dict),
+            exclude=("stdout", "log", "json", "csv"),
+        )
+
+    def _on_step(self) -> bool:
+        return True
