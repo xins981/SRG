@@ -8,14 +8,14 @@ from stable_baselines3.common.callbacks import CallbackList, CheckpointCallback,
 from stable_baselines3.common.monitor import Monitor
 import os, datetime
 import yaml
-os.environ['DISPLAY'] = ':11.0'
+os.environ['DISPLAY'] = ':10.0'
 
 
-def make_env(rank, seed=0, vis=False, episode_timestemp=5, reward_scale=10):
+def make_env(rank, seed=0, vis=False, max_episode_len=5, reward_scale=10):
     
     def _init():
         
-        env = Environment(vis=vis, episode_timestemp=episode_timestemp, reward_scale=reward_scale)
+        env = Environment(vis=vis, max_episode_len=max_episode_len, reward_scale=reward_scale)
         env = Monitor(env)
         env.reset(seed=seed + rank)
         
@@ -35,12 +35,12 @@ def train():
                         boltzmann_beta=5)
     
     n_training_envs = 64
-    n_eval_envs = 8
-    episode_timestemp = 5
+    # n_eval_envs = 8
+    max_episode_len = 5
     reward_scale = 10
-    total_timesteps = 1000_000
-    train_env = SubprocVecEnv([make_env(rank=i, episode_timestemp=episode_timestemp, reward_scale=reward_scale) for i in range(n_training_envs)])
-    eval_env = SubprocVecEnv([make_env(rank=i, episode_timestemp=episode_timestemp, reward_scale=reward_scale) for i in range(n_training_envs, n_training_envs + n_eval_envs)])
+    total_timesteps = 150_000_000
+    train_env = SubprocVecEnv([make_env(rank=i, max_episode_len=max_episode_len, reward_scale=reward_scale) for i in range(n_training_envs)])
+    # eval_env = SubprocVecEnv([make_env(rank=i, max_episode_len=max_episode_len, reward_scale=reward_scale) for i in range(n_training_envs, n_training_envs + n_eval_envs)])
 
     for i in range(1, 2): # different hyper-parameters
 
@@ -48,33 +48,34 @@ def train():
 
             session_dir = f"{experiment_dir}/trial_{i}/session_{j}"
             
-            checkpoint_callback = CheckpointCallback(save_freq=max(5000 // n_training_envs, 1), save_path=f"{session_dir}/checkpoints", 
-                                                     name_prefix="sac_model", save_replay_buffer=True)
-            eval_callback = EvalCallback(eval_env, best_model_save_path=session_dir, log_path=session_dir, 
-                                         deterministic=True, eval_freq=max(1000 // n_training_envs, 1), n_eval_episodes=8)
-            callback_list = CallbackList([checkpoint_callback, eval_callback])
+            # checkpoint_callback = CheckpointCallback(save_freq=max(100000 // n_training_envs, 1), save_path=f"{session_dir}/checkpoints", 
+            #                                          name_prefix="sac_model", save_replay_buffer=True)
+            # eval_callback = EvalCallback(eval_env, best_model_save_path=session_dir, log_path=session_dir, 
+            #                              deterministic=True, eval_freq=max(5000 // n_training_envs, 1), n_eval_episodes=8)
+            # callback_list = CallbackList([checkpoint_callback, eval_callback])
 
             model = SAC(env=train_env, policy="MlpPolicy", policy_kwargs=policy_kwargs, 
-                        gamma=0.8, tau=0.005, batch_size=256, gradient_steps=8, learning_starts=1000, 
-                        blm_update_step=10000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
-            model.learn(total_timesteps=total_timesteps, callback=callback_list)
+                        gamma=0.8, tau=0.05, batch_size=512, gradient_steps=8, learning_starts=1000, 
+                        blm_update_step=50000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
+            # model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
+            model.learn(total_timesteps=total_timesteps)
             
             with open(f'{session_dir}/hyparam.yaml','a') as f:
                 hyparam_dict = {
-                    "episode timestep": episode_timestemp,
+                    "max episode step": max_episode_len,
                     "reward scale": reward_scale,
                     "total timesteps": total_timesteps,
-                    "num of env": model.n_envs,
+                    "env number": model.n_envs,
                     "buffer size": model.buffer_size,
-                    "learning start": model.learning_starts,
-                    "train frequency": model.train_freq.frequency,
+                    "learning start": f"{model.learning_starts} step",
+                    "train frequency": f"{model.train_freq.frequency} rollout",
                     "learning rate": model.learning_rate,
                     "gamma": model.gamma,
                     "tau": model.tau,
                     "gradient step": model.gradient_steps,
                     "batch size": model.batch_size,
                     "feature dim": model.policy_kwargs["features_extractor_kwargs"]["features_dim"],
-                    "net arch": model.policy_kwargs["net_arch"],
+                    "net arch": str(model.policy_kwargs["net_arch"]),
                 }
                 yaml.dump(hyparam_dict, f)
 
@@ -82,7 +83,7 @@ def train():
             model.save_replay_buffer(f"{session_dir}/trained_model_replay_buffer")
     
     train_env.close()
-    eval_env.close()
+    # eval_env.close()
 
 
 def eval(model_dir, log_dir):

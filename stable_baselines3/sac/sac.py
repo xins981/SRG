@@ -268,6 +268,8 @@ class SAC(OffPolicyAlgorithm):
             tb_log_name=tb_log_name,
             reset_num_timesteps=reset_num_timesteps,
             progress_bar=progress_bar,
+            blm_update_step=self.blm_update_step,
+            blm_end=self.blm_end,
         )
     
     

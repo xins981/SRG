@@ -17,8 +17,10 @@ import open3d as o3d
 
 class Environment(gym.Env):
 
-    def __init__(self, vis=False, observation_shape=(512, 3), episode_timestemp=5, reward_scale=10):
-
+    def __init__(self, vis=False, observation_shape=(512, 3), max_episode_len=5, reward_scale=10):
+        
+        self.max_episode_len = max_episode_len
+        self.reward_scale = reward_scale
         self.debug_frame = dict()
         self.workspace = np.asarray([[0.304, 0.752], 
                                      [-0.02, 0.428], 
@@ -121,8 +123,9 @@ class Environment(gym.Env):
         self.gripper.open()
         self.pb_utils.set_body_pose_in_world(self.gripper.id, gripper_in_world)
         contact_pts_gripper_obj = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.obj_ids[0])
-        contact_pts_gripper_plane = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.env_body['plane'])
-        if len(contact_pts_gripper_obj) != 0 or len(contact_pts_gripper_plane) != 0: # gripper invoke target object
+        # contact_pts_gripper_plane = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.env_body['plane'])
+        # if len(contact_pts_gripper_obj) != 0 or len(contact_pts_gripper_plane) != 0: # gripper invoke target object
+        if len(contact_pts_gripper_obj) != 0: # gripper invoke target object
             grasp_success = False
         else:
             self.gripper.close()
@@ -132,16 +135,17 @@ class Environment(gym.Env):
             self.pb_utils.set_body_pose_in_world(self.obj_ids[0], self.object_in_world)
             self.pb_utils.set_body_pose_in_world(self.gripper.id, np.eye(4))
 
-        if self._num_step < 5 and grasp_success == False:
+        observation = self._get_observation()
+        # reward = 0 if grasp_success == True else -1
+        reward = int(grasp_success) * self.reward_scale
+        if self._num_step < self.max_episode_len and grasp_success == False:
             terminated = False
         else:
             terminated = True
+        truncated = False
+        info = {"is_success": grasp_success}
 
-        observation = self._get_observation()
-        info = {}
-        reward = int(grasp_success) * 10
-
-        return observation, reward, terminated, False, info
+        return observation, reward, terminated, truncated, info
 
 
     def close(self):

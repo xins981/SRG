@@ -293,6 +293,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
     def learn(
         self: SelfOffPolicyAlgorithm,
         total_timesteps: int,
+        blm_update_step,
+        blm_end,
         callback: MaybeCallback = None,
         log_interval: int = 4,
         tb_log_name: str = "run",
@@ -331,7 +333,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 if gradient_steps > 0:
                     self.train(batch_size=self.batch_size, gradient_steps=gradient_steps)
             
-            if self.num_timesteps % self.blm_update_step == 0 and self.policy.boltzmann_beta > self.blm_end:
+            if self.num_timesteps % blm_update_step == 0 and self.policy.boltzmann_beta > blm_end:
                 self.policy.boltzmann_beta *= 0.65
 
         callback.on_training_end()
@@ -388,7 +390,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             # Note: when using continuous actions,
             # we assume that the policy uses tanh to scale the action
             # We use non-deterministic action in the case of SAC, for TD3, it does not matter
-            unscaled_action, _ = self.predict(self._last_obs, deterministic=False) # （B, 8)
+            data_dir = f'{self.tensorboard_log}/data'
+            unscaled_action, _ = self.predict(self._last_obs, deterministic=False, rollout=int(self.num_timesteps/n_envs), data_dir=data_dir) # （B, 8)
 
         # Rescale the action from [low, high] to [-1, 1]
         # if isinstance(self.action_space, spaces.Box):
@@ -557,8 +560,8 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 # Sample a new noise matrix
                 self.actor.reset_noise(env.num_envs)
 
-            # Select action randomly or according to policy
-            actions, buffer_actions = self._sample_action(learning_starts, action_noise, env.num_envs) # (B, 10)
+            # Select action randomly or according to policy; actions (B, 7), buffer_actions (B, 8).
+            actions, buffer_actions = self._sample_action(learning_starts, action_noise, env.num_envs) 
 
             # Rescale and perform action
             new_obs, rewards, dones, infos = env.step(actions)

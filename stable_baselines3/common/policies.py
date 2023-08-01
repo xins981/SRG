@@ -335,7 +335,7 @@ class BasePolicy(BaseModel, ABC):
         """
 
 
-    def predict(self, observation, state=None, episode_start=None, deterministic=False):
+    def predict(self, observation, state=None, episode_start=None, deterministic=False, rollout=None, data_dir=None):
         
         """ Get the policy action from an observation (and optional hidden state).
         Includes sugar-coating to handle different observations (e.g. normalizing images).
@@ -355,7 +355,7 @@ class BasePolicy(BaseModel, ABC):
         observation, vectorized_env = self.obs_to_tensor(observation)
 
         with th.no_grad():
-            actions = self._predict(observation, deterministic=deterministic)
+            actions = self._predict(observation, deterministic=deterministic, rollout=rollout, data_dir=data_dir)
         # Convert to numpy, and reshape to the original action shape
         actions = actions.cpu().numpy().reshape((-1, np.prod(self.action_space.shape)+1)) # (B, 8)
 

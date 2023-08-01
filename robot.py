@@ -204,8 +204,8 @@ class Gripper:
 
 
     def close(self):
-        self._move_finger(target_positions=[1, 1], step=50, delay=1/10)
-        # self._move_finger(target_positions=[1, 1], step=50)
+        # self._move_finger(target_positions=[1, 1], step=50, delay=1/10)
+        self._move_finger(target_positions=[1, 1], step=50)
 
 
     def _move_finger(self, target_positions, step, delay=None):

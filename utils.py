@@ -1,9 +1,10 @@
 import numpy as np
 import transformations as tf
-import copy
+import copy, os
 import open3d as o3d
 from collections import namedtuple
 import torch
+from matplotlib.colors import LinearSegmentedColormap
 
 
 def to_grasp(param):
@@ -29,22 +30,12 @@ def to_grasp(param):
     return T
 
 
-
-    # norm_y = np.linalg.norm(axis_y)
-    # axis_y = axis_y / norm_y if norm_y > 0 else [0, 1, 0]
-    # axis_x = [axis_y[1], -axis_y[0], 0]
-    # norm_x = np.linalg.norm(axis_x)
-    # axis_x = axis_x / norm_x if norm_x > 0 else [1, 0, 0]
-    # axis_z = np.cross(axis_x, axis_y)
-    # norm_z = np.linalg.norm(axis_z)
-    # axis_z = axis_z / norm_z if norm_z > 0 else [0, 0, 1]
-
-
 def normalize_rotation(pose):
   '''Assume no shear case
   '''
   new_pose = pose.copy()
-  scales = np.linalg.norm(pose[:3,:3],axis=0)
+  scales = np.linalg.norm(pose[:3,:3], axis=0)
+  assert (scales != 0).all(), "pose column vector norm should not be zero"
   new_pose[:3,:3] /= scales.reshape(1,3)
   return new_pose
 
@@ -182,6 +173,45 @@ def normalizeRotation(pose):
     scales = np.linalg.norm(pose[:3,:3],axis=0)
     new_pose[:3,:3] /= scales.reshape(1,3)
     return new_pose
+
+
+def save_pcd(pts, data_dir, rollout):
+
+    data_dir = f'{data_dir}/pcd'
+    if rollout == 1:
+        for i in range(pts.shape[0]):
+            pcd_dir = f'{data_dir}/{i:02d}'
+            os.makedirs(pcd_dir, exist_ok=True)
+
+    for i, batch in enumerate(pts):
+        cloud = toOpen3dCloud(batch)
+        file_name = os.path.join(f'{data_dir}/{i:02d}', f'{rollout:05d}.pts.pcd')
+        o3d.io.write_point_cloud(file_name, cloud)
+
+
+def save_q_map(pts, q_value, data_dir, rollout):
+    
+    data_dir = f'{data_dir}/q_map'
+    if rollout == 1:
+        for i in range(pts.shape[0]):
+            q_map_dir = f'{data_dir}/{i:02d}'
+            os.makedirs(q_map_dir, exist_ok=True)
+
+    colors = [(0, 0, 1), (1, 0, 0)]  # Blue to red
+    n_bins = 100  # Number of bins to represent the gradient
+    cmap_name = 'energy_gradient'
+    cm = LinearSegmentedColormap.from_list(cmap_name, colors, N=n_bins)
+
+    for i, batch in enumerate(pts):
+        min_q = np.min(q_value[i,:])
+        max_q = np.max(q_value[i,:])
+        scaled_q = (q_value[i,:] - min_q) / (max_q - min_q)
+        
+        color_q = cm(scaled_q)[:,:3] # (N, 3)
+
+        cloud = toOpen3dCloud(points=batch, colors=color_q)
+        file_name = os.path.join(f'{data_dir}/{i:02d}', f'{rollout:05d}.q_vlaue.pcd')
+        o3d.io.write_point_cloud(file_name, cloud)
 
 
 #---------------------------------------------------------------------------

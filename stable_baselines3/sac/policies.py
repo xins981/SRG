@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 import torch as th
 from gymnasium import spaces
 from torch import nn
-import numpy as np
+import os
 
 from stable_baselines3.common.distributions import SquashedDiagGaussianDistribution, StateDependentNoiseDistribution
 from stable_baselines3.common.policies import BasePolicy, ContinuousCritic
@@ -17,6 +17,7 @@ from stable_baselines3.common.torch_layers import (
     get_actor_critic_arch,
 )
 from stable_baselines3.common.type_aliases import Schedule
+from utils import save_pcd, save_q_map
 
 # CAP the standard deviation of the actor
 LOG_STD_MAX = 2
@@ -390,7 +391,7 @@ class SACPolicy(BasePolicy):
         return ContinuousCritic(**critic_kwargs).to(self.device)
 
 
-    def forward(self, obs, deterministic=False):
+    def forward(self, obs, deterministic, data_dir, rollout):
         
         params_pointwise = self.actor(obs, deterministic=deterministic) # (B, N, 7)
         q_values = th.cat(self.critic(obs, params_pointwise), dim=2)
@@ -401,14 +402,20 @@ class SACPolicy(BasePolicy):
         else:
             anchor_index = q_values_distribution.multinomial(num_samples=1) # (B, 1)
         
+        if data_dir != None and (rollout - 1) % 20 == 0:
+            pts = obs[:,:,:3].cpu().numpy() # (B, N, 3)
+            q_value = min_q_values.cpu().numpy() # (B, N)
+            save_pcd(pts=pts, data_dir=data_dir, rollout=rollout)
+            save_q_map(pts=pts, q_value=q_value, data_dir=data_dir, rollout=rollout)
+
         action_params = th.gather(params_pointwise, 1, anchor_index.unsqueeze(-1).expand(-1, -1, 7)).squeeze(1) # (B, 7)
         action_params = th.cat((action_params,anchor_index), dim=-1) # (B, 8)
         
         return action_params
 
 
-    def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:
-        return self(observation, deterministic)
+    def _predict(self, observation, deterministic=False, data_dir=None, rollout=None):
+        return self(observation, deterministic, data_dir, rollout)
 
 
     def set_training_mode(self, mode: bool) -> None:
