@@ -155,14 +155,13 @@ cython_debug/
 resources
 logs
 .vscode/
-test/
+test
 stable_baselines3/a2c
 stable_baselines3/ddpg
 stable_baselines3/dqn
 stable_baselines3/her
 stable_baselines3/ppo
 stable_baselines3/td3
-models
 motion
 pybullet_tools
 

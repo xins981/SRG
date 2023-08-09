@@ -44,11 +44,11 @@ class Environment(gym.Env):
         add_data_path()
         with LockRenderer():
             with HideOutput(True):
-                plane = load_pybullet("plane.urdf", fixed_base=True)
+                plane = load_pybullet("models/plane.urdf", fixed_base=True)
                 floor = load_pybullet('models/short_floor.urdf', fixed_base=True)
                 set_point(floor, [0.5, 0.5, 0.01/2])
                 draw_pose(get_pose(floor), length=0.5)
-                tray = load_pybullet("tray/traybox.urdf", fixed_base=True)
+                tray = load_pybullet("models/traybox.urdf", fixed_base=True)
                 set_point(tray, [0.5, -0.5, 0.02/2])
                 draw_pose(get_pose(tray), length=0.5)
                 self.robot = load_pybullet(FRANKA_URDF, fixed_base=True)
