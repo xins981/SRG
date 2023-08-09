@@ -1,79 +1,130 @@
 import os, time
 import numpy as np
 import pybullet as p
-import pybullet_data
 import pybullet_utils.bullet_client as bullet_client
 import gymnasium as gym
 from gymnasium import spaces
-from robot import UR5Robotiq85, Gripper
+# from robot import UR5Robotiq85, Gripper
 from camera import Camera
 import transformations as tf
-import utils
-from utils import Pybullet_Utils
+# import utils
+# from utils import Pybullet_Utils
 from uuid import uuid4
 import open3d as o3d
 
+from pybullet_tools.utils import *
+
+from pybullet_tools.panda_primitives import *
+
+from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF
+from pybullet_tools.ikfast.ikfast import get_ik_joints, either_inverse_kinematics, check_ik_solver
+
+
+HOME_JOINT_VALUES = [0.00, 0.074, 0.00, -1.113, 0.00, 1.510, 0.671, 0.04, 0.04]
 
 
 class Environment(gym.Env):
 
-    def __init__(self, vis=False, observation_shape=(512, 3), max_episode_len=5, reward_scale=10):
-        
-        self.max_episode_len = max_episode_len
+    def __init__(self, reward_scale, vis=False):
+
         self.reward_scale = reward_scale
-        self.debug_frame = dict()
+        # self.debug_frame = dict()
+
+        #region Gym Env Setup
         self.workspace = np.asarray([[0.304, 0.752], 
                                      [-0.02, 0.428], 
                                      [0, 0.4]])
-        
         approach_radian = np.pi / 2
-        action_min = np.array([-0.05, -0.05, -0.05, -1, -1, -1, -approach_radian])
-        action_max = np.array([0.05, 0.05, 0.05, 1, 1, 1, approach_radian])
-        self.observation_space = spaces.Box(-np.inf, np.inf, shape=observation_shape)
-        self.action_space = spaces.Box(action_min, action_max, shape=(7,))
+        action_min = np.array([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -approach_radian])
+        action_max = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, approach_radian])
+        self.observation_space = spaces.Box(-10.0, 10.0, shape=(25600, 3), dtype=np.float32)
+        self.action_space = spaces.Box(action_min, action_max, shape=(7, ), dtype=np.float32)
+        #endregion
 
-        # Connect to simulator
-        self._vis = vis
-        conn_mode = p.GUI if vis else p.DIRECT
-        self.sim = bullet_client.BulletClient(connection_mode=conn_mode)
-        self.sim.setAdditionalSearchPath(pybullet_data.getDataPath())
-        # self.sim.setGravity(0, 0, -10)
+        #region Connect to simulator
+        connect(use_gui=vis)
+        draw_global_system()
+        set_camera_pose(camera_point=[1, -1, 1])
+        add_data_path()
+        with LockRenderer():
+            with HideOutput(True):
+                plane = load_pybullet("plane.urdf", fixed_base=True)
+                floor = load_pybullet('models/short_floor.urdf', fixed_base=True)
+                set_point(floor, [0.8, 0.2, 0.01/2])
+                draw_pose(get_pose(floor), length=0.5)
+                tray = load_pybullet("tray/traybox.urdf", fixed_base=True)
+                set_point(tray, [0.8, -0.55, 0.02/2])
+                draw_pose(get_pose(tray), length=0.5)
+                self.robot = load_pybullet(FRANKA_URDF, fixed_base=True)
+                set_configuration(self.robot, HOME_JOINT_VALUES)
+                assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
+        
+        # dump_body(self.robot)
+        
+        # joint0_id = p.addUserDebugParameter("joint0", -2.897, 2.897, 0)
+        # joint1_id = p.addUserDebugParameter("joint1", -1.763, 1.763, 0)
+        # joint2_id = p.addUserDebugParameter("joint2", -2.897, 2.897, 0)
+        # joint3_id = p.addUserDebugParameter("joint3", -3.072, -0.070, 0)
+        # joint4_id = p.addUserDebugParameter("joint4", -2.897, 2.897, 0)
+        # joint5_id = p.addUserDebugParameter("joint5", -0.018, 3.752, 0)
+        # joint6_id = p.addUserDebugParameter("joint6", -2.897, 2.897, 0)
+        # joint9_id = p.addUserDebugParameter("joint9", 0, 0.04, 0)
+        # joint10_id = p.addUserDebugParameter("joint10", 0, 0.04, 0)
+
+        # while True:
+        #     joint0 = p.readUserDebugParameter(joint0_id)
+        #     joint1 = p.readUserDebugParameter(joint1_id)
+        #     joint2 = p.readUserDebugParameter(joint2_id)
+        #     joint3 = p.readUserDebugParameter(joint3_id)
+        #     joint4 = p.readUserDebugParameter(joint4_id)
+        #     joint5 = p.readUserDebugParameter(joint5_id)
+        #     joint6 = p.readUserDebugParameter(joint6_id)
+        #     joint9 = p.readUserDebugParameter(joint9_id)
+        #     joint10 = p.readUserDebugParameter(joint10_id)
+
+        #     set_configuration(self.robot, [joint0, joint1, joint2, joint3, joint4, joint5, joint6, joint9, joint10])
+                
+        self.ik_info = PANDA_INFO
+        self.tool_link = link_from_name(self.robot, 'panda_hand')
+        self.ik_joints = get_ik_joints(self.robot, self.ik_info, self.tool_link)
+        self.moveable_joints = get_movable_joints(self.robot)
+        self.fixed = [plane, floor]
+        self.gripper_from_approach = np.eye(4)
+        self.gripper_from_approach[0,0] = -0.05
+        self.gripper_from_approach = None
+        self.finger_joints = joints_from_names(self.robot, ["panda_finger_joint1", "panda_finger_joint2"])
+        self.ee_close_values = get_min_limits(self.robot, self.finger_joints)
+        self.ee_open_values = get_max_limits(self.robot, self.finger_joints)
+        #endregion
+        
+        
+        # bin_from_gripper = np.eye(4)
+        # bin_from_gripper[3,3] = 0.2
+        # bin_from_gripper = world_from_bin @ bin_from_gripper
+        # conf_bin_overhead = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, 
+        #                                 bin_from_gripper, obstacls=self.fixed+[self.robot])
+        # saved_world = WorldSaver()
+        # path_init_to_bin = plan_direct_joint_motion(self.robot, self.ik_joints, conf_bin_overhead, obstacles=self.fixed+[self.robot])
+        # saved_world.restore()
+        # self.command_init_to_bin = Command([BodyPath(self.robot, path_init_to_bin, joints=self.ik_joints)])
+
+        self.sim = bullet_client.BulletClient(connection_mode=(p.GUI if self.vis else p.DIRECT))
+        self.sim.setGravity(0, 0, -10)
         self.pb_utils = Pybullet_Utils(simulator=self.sim)
         self.mesh_to_urdf = {}
 
         self.env_body = dict()
-        plane_id = self.sim.loadURDF("plane.urdf", useMaximalCoordinates=True)
-        self.env_body['plane'] = plane_id
-        work_floor_id = self.sim.loadURDF('resources/objects/work_floor.urdf', basePosition=[0.528, 0.204, 0], useMaximalCoordinates=True)
-        self.env_body['work_floor'] = work_floor_id
+        self.env_body['work_floor'] = self.sim.loadURDF('resources/objects/work_floor.urdf', basePosition=[0.528, 0.204, 0], useMaximalCoordinates=True)
 
-        # self.robot = UR5Robotiq85(sim=self.sim)
-        # self.robot.load()
-        # self.robot.step_simulation = self.step_simulation
-
-        # load gripper
-        self.gripper = Gripper(simulator=self.sim, pybullet_utils=self.pb_utils)
-        self.gripper.step_simulation = self._step_simulation
-        self.env_body['gripper'] = self.gripper.id
-        self._draw_body_pose(body_id=self.gripper.id, link_id=3, line_width=5)
-        # self._add_debug_frame('grasp', np.eye(4))
-
-        # Setup virtual camera in simulation
-        K = np.array([2257.7500557850776, 0,                  1032,
-                        0,                  2257.4882391629421, 772,
-                        0,                  0,                  1]).reshape(3,3)
-        H = 1544   # image height
-        W = 2064   # image width
-        self.camera = Camera(K, H, W)
-        self.camera.id = self._load_mesh(f'resources/camera/kinectsensor.obj', 
-                                         ob_in_world=self.camera.view_matrix, mass=0, 
-                                         has_collision=False)
-        self.camera.getCameraImage = self._getCameraImage
-        self.env_body['camera'] = self.camera.id
+        # Setup camera in simulation
+        self.camera = Camera(self.sim)
+        self.env_body['camera'] = self._load_mesh(f'resources/camera/kinectsensor.obj', ob_in_world=self.camera.view_matrix, 
+                                                 mass=0, has_collision=False)
+        self.world_from_camera = self.camera.view_matrix
         
         # add object
         self.obj_dir = 'resources/objects/blocks'
-        self.num_obj = 1
+        self.num_obj = 5
         self.mesh_list = os.listdir(self.obj_dir)
         self.obj_mesh_ind = np.random.randint(0, 8, self.num_obj)
         self.obj_ids = []
@@ -110,58 +161,84 @@ class Environment(gym.Env):
 
 
     def step(self, action_params):
+
+        camera_from_grasp = utils.to_grasp(action_params)
+        world_from_grasp = self.world_from_camera @ camera_from_grasp
+        world_from_gripper = world_from_grasp @ self.grasp_from_gripper
+
+        world_from_approach = world_from_gripper @ self.gripper_from_approach
         
-        self._num_step += 1
-        self.grasp_matrix_in_camera = utils.to_grasp(action_params)
-        grasp_in_world = self.camera.view_matrix @ self.grasp_matrix_in_camera
-        gripper_in_world = grasp_in_world @ self.gripper.gripper_in_grasp
+        set_configuration(self.robot, HOME_JOINT_VALUES)
+        self.open_ee()
+        
+        saved_world = WorldSaver()
+        conf_init = get_joint_positions(self.robot, self.ik_joints)
+        
+        conf_approach = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, world_from_approach, obstacls=self.fixed+[self.robot])
+        conf_grasp = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, world_from_gripper, obstacls=self.fixed+[self.robot])
+        if conf_approach is None or conf_grasp is None:
+            print("ik failed")
 
-        # if self.debug_frame['grasp'] != None:
-        #     self.debug_frame['grasp']['pose_in_world'] = grasp_in_world
-        # self._update_debug_frame()
+        set_joint_positions(self.robot, self.ik_joints, conf_approach)
+        path_approach_to_grasp = plan_direct_joint_motion(self.robot, self.ik_joints, conf_grasp, obstacles=self.fixed+[self.robot])
+        if path_approach_to_grasp is None:
+            print("to grasp pose plan failed")
 
-        self.gripper.open()
-        self.pb_utils.set_body_pose_in_world(self.gripper.id, gripper_in_world)
-        contact_pts_gripper_obj = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.obj_ids[0])
-        # contact_pts_gripper_plane = self.sim.getContactPoints(bodyA=self.gripper.id, bodyB=self.env_body['plane'])
-        # if len(contact_pts_gripper_obj) != 0 or len(contact_pts_gripper_plane) != 0: # gripper invoke target object
-        if len(contact_pts_gripper_obj) != 0: # gripper invoke target object
-            grasp_success = False
-        else:
-            self.gripper.close()
-            grasp_success = self._is_grasp_success()
+        set_joint_positions(self.robot, self.ik_joints, conf_init)
+        path_init_to_approach = plan_joint_motion(self.robot, self.ik_joints, conf_approach, obstacles=(self.fixed+self.obj_ids), self_collisions=True)
+        if path_init_to_approach is None:
+            print("to approach pose plan failed")
 
-        if grasp_success == False:
-            self.pb_utils.set_body_pose_in_world(self.obj_ids[0], self.object_in_world)
-            self.pb_utils.set_body_pose_in_world(self.gripper.id, np.eye(4))
+        commands_pre = Command([BodyPath(self.robot, path_init_to_approach, joints=self.ik_joints),
+                                BodyPath(self.robot, path_approach_to_grasp, joints=self.ik_joints)])
+        
+        commands_post = Command([BodyPath(self.robot, path_approach_to_grasp[::-1], joints=self.ik_joints),
+                                BodyPath(self.robot, path_init_to_approach[::-1], joints=self.ik_joints)])
+        saved_world.restore()
+        
+        commands_pre.refine(num_steps=10).execute(time_step=0.005)
+        self.close_ee()
+        commands_post.refine(num_steps=10).execute(time_step=0.005)
+        
+        grasp_success = self._is_grasp_success()
+        if grasp_success == True:
+            
+            self.command_init_to_bin.refine(num_steps=10).execute(time_step=0.005)
+            self.open_ee()
+        set_configuration(self.robot, HOME_JOINT_VALUES)
 
-        observation = self._get_observation()
-        # reward = 0 if grasp_success == True else -1
+        observation = self.get_observation()
         reward = int(grasp_success) * self.reward_scale
-        if self._num_step < self.max_episode_len and grasp_success == False:
-            terminated = False
-        else:
+        terminated = False
+        if not self.has_obj_in_workspace():
             terminated = True
-        truncated = False
         info = {"is_success": grasp_success}
-
-        return observation, reward, terminated, truncated, info
+    
+        return observation, reward, terminated, False, info
 
 
     def close(self):
         
-        self.sim.disconnect()
-
+        disconnect()
+    
 
     #---------------------------------------------------------------------------
     # Environment Control Functions
     #---------------------------------------------------------------------------
-    def _step_simulation(self, delay=None):
-       
-        self.sim.stepSimulation()
-        if self._vis and delay != None:
-            time.sleep(delay)
+    def close_ee(self):
 
+        for _ in joint_controller_hold(self.robot, ["panda_finger_joint1", "panda_finger_joint2"], self.ee_close_values, timeout=(50*self.dt)):
+            step_simulation()
+
+
+    def open_ee(self):
+        
+        for _ in joint_controller_hold(self.robot, ["panda_finger_joint1", "panda_finger_joint2"], self.ee_open_values, timeout=(50*self.dt)):
+            step_simulation()
+
+
+    def has_obj_in_workspace(self):
+        pass
 
     def _check_out_workspace(self, obj_id):
         
@@ -238,7 +315,7 @@ class Environment(gym.Env):
         self.obj_ids.remove(obj_id)
 
 
-    def _get_observation(self):
+    def get_observation(self):
 
         rgb, depth, seg = self.camera.shot()
         pts_scene = utils.depth2xyzmap(depth, self.camera._k)
@@ -318,14 +395,6 @@ class Environment(gym.Env):
         #     return False
         # return True
     
-
-    def _getCameraImage(self, width, height, viewMatrix, projectionMatrix, shadow, lightDirection):
-        
-        width, height, rgb, depth, seg = self.sim.getCameraImage(width=width, height=height, viewMatrix=viewMatrix, 
-                                                        projectionMatrix=projectionMatrix, shadow=shadow, 
-                                                        lightDirection=lightDirection)
-        return width, height, rgb, depth, seg
-
 
     #---------------------------------------------------------------------------
     # Helper Functions
