@@ -28,9 +28,7 @@ class Environment(gym.Env):
     def __init__(self, reward_scale, vis=False):
 
         self.reward_scale = reward_scale
-        # self.debug_frame = dict()
 
-        #region Gym Env Setup
         self.workspace = np.asarray([[0.304, 0.752], 
                                      [-0.02, 0.428], 
                                      [0, 0.4]])
@@ -39,9 +37,7 @@ class Environment(gym.Env):
         action_max = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, approach_radian])
         self.observation_space = spaces.Box(-10.0, 10.0, shape=(25600, 3), dtype=np.float32)
         self.action_space = spaces.Box(action_min, action_max, shape=(7, ), dtype=np.float32)
-        #endregion
 
-        #region Connect to simulator
         connect(use_gui=vis)
         draw_global_system()
         set_camera_pose(camera_point=[1, -1, 1])
@@ -50,14 +46,22 @@ class Environment(gym.Env):
             with HideOutput(True):
                 plane = load_pybullet("plane.urdf", fixed_base=True)
                 floor = load_pybullet('models/short_floor.urdf', fixed_base=True)
-                set_point(floor, [0.8, 0.2, 0.01/2])
+                set_point(floor, [0.5, 0.5, 0.01/2])
                 draw_pose(get_pose(floor), length=0.5)
                 tray = load_pybullet("tray/traybox.urdf", fixed_base=True)
-                set_point(tray, [0.8, -0.55, 0.02/2])
+                set_point(tray, [0.5, -0.5, 0.02/2])
                 draw_pose(get_pose(tray), length=0.5)
                 self.robot = load_pybullet(FRANKA_URDF, fixed_base=True)
+                set_point(self.robot, [0, 0, 0.01])
                 set_configuration(self.robot, HOME_JOINT_VALUES)
                 assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
+                self.fixed = [plane, floor, tray]
+                set_camera_pose([0.5, 0.8, 0.7], target_point=[0.5, 0.5, 0.01])
+                # self.camera_pose = get_camera_pose()
+                # camera = load_pybullet("models/kinect/kinect.urdf", fixed_base=True)
+                # set_pose(camera, get_camera_pose())
+                # draw_pose(get_pose(camera), length=0.5)
+                
         
         # dump_body(self.robot)
         
@@ -83,44 +87,71 @@ class Environment(gym.Env):
         #     joint10 = p.readUserDebugParameter(joint10_id)
 
         #     set_configuration(self.robot, [joint0, joint1, joint2, joint3, joint4, joint5, joint6, joint9, joint10])
-                
+        get_image(view_matrix=get_camera_pose(), vertical_fov=30, segment=True)
+                        
         self.ik_info = PANDA_INFO
         self.tool_link = link_from_name(self.robot, 'panda_hand')
         self.ik_joints = get_ik_joints(self.robot, self.ik_info, self.tool_link)
         self.moveable_joints = get_movable_joints(self.robot)
-        self.fixed = [plane, floor]
-        self.gripper_from_approach = np.eye(4)
-        self.gripper_from_approach[0,0] = -0.05
-        self.gripper_from_approach = None
+        
         self.finger_joints = joints_from_names(self.robot, ["panda_finger_joint1", "panda_finger_joint2"])
         self.ee_close_values = get_min_limits(self.robot, self.finger_joints)
         self.ee_open_values = get_max_limits(self.robot, self.finger_joints)
-        #endregion
         
+        self.gripper_from_approach = Pose(point=[0,0,-0.05])
+        self.gripper_from_grasp = Pose(point=[0,0,0.1])
         
+        # draw_pose(Pose(), parent=self.robot, parent_link=11)
+
+        # draw_aabb(get_subtree_aabb(plane))
+        # draw_aabb(get_subtree_aabb(floor))
+        # draw_aabb(get_subtree_aabb(tray))
+        # draw_aabb(get_subtree_aabb(self.robot))
+
+        saved_world = WorldSaver()
+        quat = get_link_pose(self.robot, 11)[1]
+        # world_from_grasp_bin_overhead = ([0.6, -0.2, 0.4], quat)
+        world_from_grasp_bin_overhead = ([0.5, -0.5, 0.4], quat)
+        wrold_from_gripper_bin_overhead = multiply(world_from_grasp_bin_overhead, invert(self.gripper_from_grasp))
+        draw_pose(wrold_from_gripper_bin_overhead, width=2)
+        conf_robot_bin_overhead = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, 
+                                            wrold_from_gripper_bin_overhead, obstacles=self.fixed)
+        if conf_robot_bin_overhead is None:
+            print("calcu ik gripper in bin overhead failed")
+        path_bin_overhead = plan_direct_joint_motion(self.robot, self.ik_joints, conf_robot_bin_overhead, obstacles=self.fixed)
+        if path_bin_overhead is None:
+            print("to bin overhead plan failed")
+        self.command_to_bin_overhead = Command([BodyPath(self.robot, path_bin_overhead, joints=self.ik_joints)])
+        saved_world.restore()
+        self.command_to_bin_overhead.refine(num_steps=10).execute(time_step=0.005)
+
+
         # bin_from_gripper = np.eye(4)
         # bin_from_gripper[3,3] = 0.2
         # bin_from_gripper = world_from_bin @ bin_from_gripper
         # conf_bin_overhead = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, 
-        #                                 bin_from_gripper, obstacls=self.fixed+[self.robot])
+        #                                 bin_from_gripper, obstacles=self.fixed+[self.robot])
         # saved_world = WorldSaver()
         # path_init_to_bin = plan_direct_joint_motion(self.robot, self.ik_joints, conf_bin_overhead, obstacles=self.fixed+[self.robot])
         # saved_world.restore()
         # self.command_init_to_bin = Command([BodyPath(self.robot, path_init_to_bin, joints=self.ik_joints)])
 
-        self.sim = bullet_client.BulletClient(connection_mode=(p.GUI if self.vis else p.DIRECT))
-        self.sim.setGravity(0, 0, -10)
-        self.pb_utils = Pybullet_Utils(simulator=self.sim)
-        self.mesh_to_urdf = {}
+        # self.sim = bullet_client.BulletClient(connection_mode=(p.GUI if self.vis else p.DIRECT))
+        # self.sim.setGravity(0, 0, -10)
+        # self.pb_utils = Pybullet_Utils(simulator=self.sim)
+        # self.mesh_to_urdf = {}
 
-        self.env_body = dict()
-        self.env_body['work_floor'] = self.sim.loadURDF('resources/objects/work_floor.urdf', basePosition=[0.528, 0.204, 0], useMaximalCoordinates=True)
+        # self.env_body = dict()
+        # self.env_body['work_floor'] = self.sim.loadURDF('resources/objects/work_floor.urdf', basePosition=[0.528, 0.204, 0], useMaximalCoordinates=True)
 
         # Setup camera in simulation
-        self.camera = Camera(self.sim)
-        self.env_body['camera'] = self._load_mesh(f'resources/camera/kinectsensor.obj', ob_in_world=self.camera.view_matrix, 
-                                                 mass=0, has_collision=False)
-        self.world_from_camera = self.camera.view_matrix
+        
+
+
+        # self.camera = Camera(self.sim)
+        # self.env_body['camera'] = self._load_mesh(f'resources/camera/kinectsensor.obj', ob_in_world=self.camera.view_matrix, 
+        #                                          mass=0, has_collision=False)
+        # self.world_from_camera = self.camera.view_matrix
         
         # add object
         self.obj_dir = 'resources/objects/blocks'
@@ -174,8 +205,8 @@ class Environment(gym.Env):
         saved_world = WorldSaver()
         conf_init = get_joint_positions(self.robot, self.ik_joints)
         
-        conf_approach = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, world_from_approach, obstacls=self.fixed+[self.robot])
-        conf_grasp = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, world_from_gripper, obstacls=self.fixed+[self.robot])
+        conf_approach = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, world_from_approach, obstacles=self.fixed+[self.robot])
+        conf_grasp = get_ik_conf(self.robot, self.ik_info, self.ik_joints, self.tool_link, world_from_gripper, obstacles=self.fixed+[self.robot])
         if conf_approach is None or conf_grasp is None:
             print("ik failed")
 
