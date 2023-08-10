@@ -5,6 +5,7 @@ import open3d as o3d
 from collections import namedtuple
 import torch
 from matplotlib.colors import LinearSegmentedColormap
+from pybullet_tools.utils import pose_from_tform
 
 
 def to_grasp(param):
@@ -26,18 +27,18 @@ def to_grasp(param):
     T = np.eye(4)
     T[:3,:3] = r_iden @ perturbation
     T[:3,3] = p
+    
 
-    return T
+    return pose_from_tform(T)
 
 
 def normalize_rotation(pose):
-  '''Assume no shear case
-  '''
-  new_pose = pose.copy()
-  scales = np.linalg.norm(pose[:3,:3], axis=0)
-  assert (scales != 0).all(), "pose column vector norm should not be zero"
-  new_pose[:3,:3] /= scales.reshape(1,3)
-  return new_pose
+  
+    new_pose = pose.copy()
+    scales = np.linalg.norm(pose[:3,:3], axis=0)
+    scales += 1e-6
+    new_pose[:3,:3] /= scales.reshape(1,3)
+    return new_pose
 
 
 def batch_param_to_grasp(grasp_param, device=None):
@@ -65,7 +66,8 @@ def batch_param_to_grasp(grasp_param, device=None):
     return grasp_poses
 
 
-def create_urdf_from_mesh(mesh_dir,concave=False, out_dir=None, mass=0.1, has_collision=True, scale=np.ones((3))):
+def create_urdf_from_mesh(mesh_dir, concave=False, out_dir=None, mass=0.1, vhacd_dir=None, has_collision=True, scale=np.ones((3))):
+    
     assert '.obj' in mesh_dir, f'mesh_dir={mesh_dir}'
 
     lateral_friction = 0.8
@@ -73,11 +75,12 @@ def create_urdf_from_mesh(mesh_dir,concave=False, out_dir=None, mass=0.1, has_co
     rolling_friction = 0.5
 
     concave_str = 'no'
-    collision_mesh_dir = copy.deepcopy(mesh_dir)
     if concave:
         concave_str = 'yes'
+
+    collision_mesh_dir = mesh_dir
     if mass!=0:
-        collision_mesh_dir = mesh_dir.replace('.obj','_vhacd.obj')
+        collision_mesh_dir = vhacd_dir
 
     collision_block = ""
     if has_collision:
