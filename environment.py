@@ -56,8 +56,9 @@ class Environment(gym.Env):
                 self.fixed = [plane, floor, tray]
                 # camera = load_pybullet("models/kinect/kinect.urdf", fixed_base=True)
                 
-        self.view = p.computeViewMatrix([0.5, 1.1, 0.55], [0.5, 0.5, 0.01], [0, 0, 1])
-        self.proj = get_projection_matrix(640, 480, 20, 0.02, 5.0)
+        self.view = p.computeViewMatrixFromYawPitchRoll([0.5, 0.5, 0.01], 0.5, 90, -45, 0, 2)
+        self.proj = get_projection_matrix(640, 480, 30, 0.02, 5.0)
+        get_image(self.view, self.proj, vertical_fov=30, segment=True)
 
         self.view_matrix = np.array(p.computeViewMatrix([0.5, 1.1, 0.55], [0.5, 0.5, 0.01], [0, 0, 1])).reshape(4,4).T
         self.proj_matrix = np.array(get_projection_matrix(640, 480, 20, 0.02, 5.0)).reshape(4,4).T
