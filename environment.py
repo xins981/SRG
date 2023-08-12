@@ -44,15 +44,15 @@ class Environment(gym.Env):
         enable_gravity()
         with LockRenderer():
             with HideOutput(True):
-                plane = load_pybullet("resources/models/plane.urdf", fixed_base=True)
+                plane = load_pybullet('resources/models/plane.urdf', fixed_base=True)
                 self.floor = load_pybullet('resources/models/short_floor.urdf', fixed_base=True)
                 set_point(self.floor, [0.5, 0.5, 0.01/2])
                 set_color(self.floor, GREY)
                 draw_pose(get_pose(self.floor), length=0.5)
-                tray = load_pybullet("resources/models/tray/traybox.urdf", fixed_base=True)
+                tray = load_pybullet('resources/models/tray/traybox.urdf', fixed_base=True)
                 set_point(tray, [0.5, -0.5, 0.02/2])
                 draw_pose(get_pose(tray), length=0.5)
-                self.robot = load_pybullet(FRANKA_URDF, fixed_base=True)
+                self.robot = load_pybullet(f'resources/{FRANKA_URDF}', fixed_base=True)
                 set_point(self.robot, [0, 0, 0.01])
                 set_configuration(self.robot, HOME_JOINT_VALUES)
                 assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
