@@ -12,6 +12,7 @@ import transformations as tf
 from uuid import uuid4
 import open3d as o3d
 import math
+import datetime
 
 from pybullet_tools.utils import *
 
@@ -32,7 +33,7 @@ class Environment(gym.Env):
         approach_radian = np.pi / 2
         action_min = np.array([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -approach_radian])
         action_max = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, approach_radian])
-        self.observation_space = spaces.Box(-10.0, 10.0, shape=(25600, 3), dtype=np.float32)
+        self.observation_space = spaces.Box(-10.0, 10.0, shape=(5000, 3), dtype=np.float32)
         self.action_space = spaces.Box(action_min, action_max, shape=(7, ), dtype=np.float32)
 
         method = p.GUI if vis else p.DIRECT
@@ -62,6 +63,7 @@ class Environment(gym.Env):
                 self.camera = Camera(self.world_from_camera)
                 self.fixed = [plane, self.floor, tray]
                 self.not_in_workspace = [plane, self.robot, tray]
+                draw_pose(self.world_from_camera, length=0.05, width=3)
                 
         self.workspace = np.asarray([[0.1, 0.9], 
                                      [0.1, 0.9]])
@@ -175,10 +177,15 @@ class Environment(gym.Env):
     def step(self, action_params):
 
         camera_from_grasp = to_grasp(action_params)
+        model_from_render = invert(Pose(euler=[0, -math.radians(90), math.radians(90)]))
+        draw_pose(multiply(model_from_render, camera_from_grasp), parent=self.camera.id, length=0.05, width=3)
         world_from_grasp = multiply(self.world_from_camera, camera_from_grasp)
+        draw_pose(world_from_grasp, length=0.05, width=3)
         world_from_gripper = multiply(world_from_grasp, self.grasp_from_gripper)
+        draw_pose(world_from_gripper, length=0.05, width=3)
 
         world_from_approach = multiply(world_from_gripper, self.gripper_from_approach)
+        draw_pose(world_from_approach, length=0.05, width=3)
         
         set_configuration(self.robot, HOME_JOINT_VALUES)
         conf_init = get_joint_positions(self.robot, self.ik_joints)
@@ -247,24 +254,39 @@ class Environment(gym.Env):
         floor_mask[seg==self.floor] = 1
         
         pts_objs = pts_scene[bg_mask==False]
-        colors_objs = rgb[bg_mask==False]
         pts_floor = pts_scene[floor_mask==True]
-        colors_floor = rgb[floor_mask==True]
 
-        o3d.io.write_point_cloud('objs.pcd', toOpen3dCloud(pts_objs, colors_objs))
-        o3d.io.write_point_cloud('floor.pcd', toOpen3dCloud(pts_floor, colors_floor))
+        # pcd_dir = f'logs/data/{datetime.datetime.now().strftime("%Y-%m-%d.%H:%M:%S")}'
+        # os.makedirs(pcd_dir, exist_ok=True)
+        # colors_objs = rgb[bg_mask==False]
+        # colors_floor = rgb[floor_mask==True]
+        # pcd_objs = toOpen3dCloud(pts_objs, colors_objs)
+        # pcd_floor = toOpen3dCloud(pts_floor, colors_floor)
+        # o3d.io.write_point_cloud(f'{pcd_dir}/objs.ply', pcd_objs)
+        # o3d.io.write_point_cloud(f'{pcd_dir}/floor.ply', pcd_floor)
 
-        num_sapmple_pts = self.observation_space.shape[0]
-        num_obj_pts = len(pts_in_workspace)
-        if num_obj_pts == 0:
-            observation = np.zeros([num_sapmple_pts, 3])
-        elif num_obj_pts < num_sapmple_pts:
-            num_padding_pts = num_sapmple_pts - num_obj_pts
-            padding_pts = np.repeat([pts_in_workspace[0]], num_padding_pts, axis=0)
-            observation = np.concatenate([pts_in_workspace, padding_pts], axis=0)
+        num_pts = self.observation_space.shape[0]
+        num_obj_pts = int(num_pts * 0.8)
+        num_floor_pts = num_pts - num_obj_pts
+        if len(pts_objs) >= num_obj_pts:
+            select_obj_index = np.random.choice(len(pts_objs), num_obj_pts, replace=False)
         else:
-            observation = pts_in_workspace[np.random.permutation(num_obj_pts)[:num_sapmple_pts]]
-        
+            select_obj_index = np.random.choice(len(pts_objs), num_obj_pts, replace=True)
+
+        if len(pts_floor) >= num_floor_pts:
+            select_floor_index = np.random.choice(len(pts_floor), num_floor_pts, replace=False)
+        else:
+            select_floor_index = np.random.choice(len(pts_floor), num_floor_pts, replace=True)
+
+        pts_objs, pts_floor = pts_objs[select_obj_index], pts_floor[select_floor_index]
+        observation = np.concatenate((pts_objs, pts_floor), axis=0)
+
+        # colors_objs, colors_floor = colors_objs[select_obj_index], colors_floor[select_obj_index]
+        # pcd_objs = toOpen3dCloud(pts_objs, colors_objs)
+        # pcd_floor = toOpen3dCloud(pts_floor, colors_floor)
+        # o3d.io.write_point_cloud(f'{pcd_dir}/objs_down.ply', pcd_objs)
+        # o3d.io.write_point_cloud(f'{pcd_dir}/floor_down.ply', pcd_floor)
+
         return observation
     
     

@@ -28,7 +28,7 @@ def make_env(rank, seed=0, vis=False, max_episode_len=5, reward_scale=10):
 
 def train():
     
-    experiment_dir = f"logs/experiment/{datetime.datetime.now().strftime('%Y-%m-%d.%H:%M:%S')}"
+    experiment_dir = f'logs/experiment/{datetime.datetime.now().strftime('%Y-%m-%d.%H:%M:%S')}'
     policy_kwargs = dict(features_extractor_class=PointNetExtractor, 
                         features_extractor_kwargs=dict(features_dim=1088),
                         net_arch=[256, 256],
@@ -46,15 +46,15 @@ def train():
 
         for j in range(1, 2): # different seed
 
-            session_dir = f"{experiment_dir}/trial_{i}/session_{j}"
+            session_dir = f'{experiment_dir}/trial_{i}/session_{j}'
             
-            # checkpoint_callback = CheckpointCallback(save_freq=max(100000 // n_training_envs, 1), save_path=f"{session_dir}/checkpoints", 
-            #                                          name_prefix="sac_model", save_replay_buffer=True)
+            # checkpoint_callback = CheckpointCallback(save_freq=max(100000 // n_training_envs, 1), save_path=f'{session_dir}/checkpoints', 
+            #                                          name_prefix='sac_model', save_replay_buffer=True)
             # eval_callback = EvalCallback(eval_env, best_model_save_path=session_dir, log_path=session_dir, 
             #                              deterministic=True, eval_freq=max(5000 // n_training_envs, 1), n_eval_episodes=8)
             # callback_list = CallbackList([checkpoint_callback, eval_callback])
 
-            model = SAC(env=train_env, policy="MlpPolicy", policy_kwargs=policy_kwargs, 
+            model = SAC(env=train_env, policy='MlpPolicy', policy_kwargs=policy_kwargs, 
                         gamma=0.8, tau=0.05, batch_size=512, gradient_steps=8, learning_starts=1000, 
                         blm_update_step=50000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
             # model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
@@ -62,25 +62,25 @@ def train():
             
             with open(f'{session_dir}/hyparam.yaml','a') as f:
                 hyparam_dict = {
-                    "max episode step": max_episode_len,
-                    "reward scale": reward_scale,
-                    "total timesteps": total_timesteps,
-                    "env number": model.n_envs,
-                    "buffer size": model.buffer_size,
-                    "learning start": f"{model.learning_starts} step",
-                    "train frequency": f"{model.train_freq.frequency} rollout",
-                    "learning rate": model.learning_rate,
-                    "gamma": model.gamma,
-                    "tau": model.tau,
-                    "gradient step": model.gradient_steps,
-                    "batch size": model.batch_size,
-                    "feature dim": model.policy_kwargs["features_extractor_kwargs"]["features_dim"],
-                    "net arch": str(model.policy_kwargs["net_arch"]),
+                    'max episode step': max_episode_len,
+                    'reward scale': reward_scale,
+                    'total timesteps': total_timesteps,
+                    'env number': model.n_envs,
+                    'buffer size': model.buffer_size,
+                    'learning start': f'{model.learning_starts} step',
+                    'train frequency': f'{model.train_freq.frequency} rollout',
+                    'learning rate': model.learning_rate,
+                    'gamma': model.gamma,
+                    'tau': model.tau,
+                    'gradient step': model.gradient_steps,
+                    'batch size': model.batch_size,
+                    'feature dim': model.policy_kwargs['features_extractor_kwargs']['features_dim'],
+                    'net arch': str(model.policy_kwargs['net_arch']),
                 }
                 yaml.dump(hyparam_dict, f)
 
-            model.save(f"{session_dir}/trained_model")
-            model.save_replay_buffer(f"{session_dir}/trained_model_replay_buffer")
+            model.save(f'{session_dir}/trained_model')
+            model.save_replay_buffer(f'{session_dir}/trained_model_replay_buffer')
     
     train_env.close()
     # eval_env.close()
@@ -91,10 +91,10 @@ def eval(model_dir, log_dir):
     eval_env = Environment(vis=True)
     eval_env = Monitor(eval_env, filename=log_dir)
     mean_reward, std_reward = evaluate_policy(best_model, eval_env, n_eval_episodes=5, deterministic=True)
-    print(f"mean_reward={mean_reward:.2f} +/- {std_reward}")
+    print(f'mean_reward={mean_reward:.2f} +/- {std_reward}')
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     
     train()
 
