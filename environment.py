@@ -11,6 +11,7 @@ import transformations as tf
 # from utils import Pybullet_Utils
 from uuid import uuid4
 import open3d as o3d
+import math
 
 from pybullet_tools.utils import *
 
@@ -34,38 +35,34 @@ class Environment(gym.Env):
         self.observation_space = spaces.Box(-10.0, 10.0, shape=(25600, 3), dtype=np.float32)
         self.action_space = spaces.Box(action_min, action_max, shape=(7, ), dtype=np.float32)
 
-        connect(use_gui=vis)
+        method = p.GUI if vis else p.DIRECT
+        sim_id = p.connect(method)
+        CLIENTS[sim_id] = True if vis else None
         draw_global_system()
         set_camera_pose([1, 1, 1], target_point=[0.5, 0.5, 0.01])
         add_data_path()
         enable_gravity()
         with LockRenderer():
             with HideOutput(True):
-                plane = load_pybullet("models/plane.urdf", fixed_base=True)
-                floor = load_pybullet('models/short_floor.urdf', fixed_base=True)
-                set_point(floor, [0.5, 0.5, 0.01/2])
-                set_color(floor, GREY)
-                draw_pose(get_pose(floor), length=0.5)
-                tray = load_pybullet("models/tray/traybox.urdf", fixed_base=True)
+                plane = load_pybullet("resources/models/plane.urdf", fixed_base=True)
+                self.floor = load_pybullet('resources/models/short_floor.urdf', fixed_base=True)
+                set_point(self.floor, [0.5, 0.5, 0.01/2])
+                set_color(self.floor, GREY)
+                draw_pose(get_pose(self.floor), length=0.5)
+                tray = load_pybullet("resources/models/tray/traybox.urdf", fixed_base=True)
                 set_point(tray, [0.5, -0.5, 0.02/2])
                 draw_pose(get_pose(tray), length=0.5)
                 self.robot = load_pybullet(FRANKA_URDF, fixed_base=True)
                 set_point(self.robot, [0, 0, 0.01])
                 set_configuration(self.robot, HOME_JOINT_VALUES)
                 assign_link_colors(self.robot, max_colors=3, s=0.5, v=1.)
-                self.fixed = [plane, floor, tray]
-                # camera = load_pybullet("models/kinect/kinect.urdf", fixed_base=True)
+                floor_from_camera = Pose(point=[0, 0.75, 1], euler=[-math.radians(145), 0, math.radians(180)])
+                world_from_floor = get_pose(self.floor)
+                self.world_from_camera = multiply(world_from_floor, floor_from_camera)
+                self.camera = Camera(self.world_from_camera)
+                self.fixed = [plane, self.floor, tray]
+                self.not_in_workspace = [plane, self.robot, tray]
                 
-        self.view = p.computeViewMatrixFromYawPitchRoll([0.5, 0.5, 0.01], 0.5, 90, -45, 0, 2)
-        self.proj = get_projection_matrix(640, 480, 30, 0.02, 5.0)
-        get_image(self.view, self.proj, vertical_fov=30, segment=True)
-
-        self.view_matrix = np.array(p.computeViewMatrix([0.5, 1.1, 0.55], [0.5, 0.5, 0.01], [0, 0, 1])).reshape(4,4).T
-        self.proj_matrix = np.array(get_projection_matrix(640, 480, 20, 0.02, 5.0)).reshape(4,4).T
-
-
-        self.world_from_camera = pose_from_tform(self.view_matrix) 
-
         self.workspace = np.asarray([[0.1, 0.9], 
                                      [0.1, 0.9]])
         self.aabb_workspace = aabb_from_extent_center([0.8, 0.8, 0.3], 
@@ -240,17 +237,22 @@ class Environment(gym.Env):
     #---------------------------------------------------------------------------
     def get_observation(self):
 
-        rgb, depth, seg, _, _ = get_image(self.view, self.proj, vertical_fov=20, segment=True)
-        pts_scene = depth2xyzmap(depth, self.proj_matrix)
-
-        # o3d.io.write_point_cloud('scene.pcd', toOpen3dCloud(pts_scene))
+        rgb, depth, seg = self.camera.render()
+        pts_scene = depth2xyzmap(depth, self.camera.k)
 
         bg_mask = depth<0.1
-        for id in self.fixed:
+        floor_mask = bg_mask.copy()
+        for id in (self.fixed+[self.robot]):
             bg_mask[seg==id] = 1
-        pts_in_workspace = pts_scene[bg_mask==False]
+        floor_mask[seg==self.floor] = 1
+        
+        pts_objs = pts_scene[bg_mask==False]
+        colors_objs = rgb[bg_mask==False]
+        pts_floor = pts_scene[floor_mask==True]
+        colors_floor = rgb[floor_mask==True]
 
-        o3d.io.write_point_cloud('workspace.pcd', toOpen3dCloud(pts_in_workspace))
+        o3d.io.write_point_cloud('objs.pcd', toOpen3dCloud(pts_objs, colors_objs))
+        o3d.io.write_point_cloud('floor.pcd', toOpen3dCloud(pts_floor, colors_floor))
 
         num_sapmple_pts = self.observation_space.shape[0]
         num_obj_pts = len(pts_in_workspace)
