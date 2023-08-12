@@ -8,13 +8,13 @@
             "name": "test_env",
             "type": "python",
             "request": "launch",
-            "python": "/home/shixin/anaconda3/envs/vpg_sac/bin/python",
+            "python": "/home/shixin/software/anaconda3/envs/vpg_sac/bin/python",
             "program": "${workspaceFolder}/test/env.py",
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": { 
                 "PYTHONPATH": "${workspaceFolder}",
-                "DISPLAY": ":11.0",
+                "DISPLAY": ":10.0",
             },
         }
     ]
