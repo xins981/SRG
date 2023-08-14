@@ -27,16 +27,18 @@ class Camera:
     self.znear = 0.1
     self.k = K
     
-    self.world_from_camera = tform_from_pose(world_from_camera) 
+    self.world_from_camera = tform_from_pose(world_from_camera)
+    camera_from_world = np.linalg.inv(self.world_from_camera)
+    self.cam_gl_from_world = cv_from_gl @ camera_from_world
+    
+    self.model_id = load_pybullet("resources/models/kinect/kinect.urdf", fixed_base=True)
+    world_from_camera_model = multiply(world_from_camera, Pose(euler=[0, -math.radians(90), math.radians(90)]))
+    set_pose(self.model_id, world_from_camera_model)
 
     self.projectionMatrix = np.array([[2*K[0,0]/W, -2*K[0,1]/W, (W - 2*K[0,2] + 2*x0)/W,            0],
                                     [0,     2*K[1,1]/H,  (-H + 2*K[1,2] + 2*y0)/H,                       0],
                                     [0,        0,             (-self.zfar - self.znear)/(self.zfar - self.znear),  -2*self.zfar*self.znear/(self.zfar - self.znear)],
                                     [0,        0,             -1,                                      0]])
-    camera_from_world = np.linalg.inv(self.world_from_camera)
-    self.cam_gl_from_world = cv_from_gl @ camera_from_world
-    self.id = load_pybullet("resources/models/kinect/kinect.urdf", fixed_base=True)
-    set_pose(self.id, multiply(world_from_camera, Pose(euler=[0, -math.radians(90), math.radians(90)])))
 
 
   def render(self):

@@ -14,7 +14,7 @@ def to_grasp(param):
     axis_y = param[3:6]
     theta = param[6] # approach angle
 
-    axis_z = [axis_y[1], -axis_y[0], 0]
+    axis_z = [0, axis_y[1], -axis_y[2]]
     axis_x = np.cross(axis_y, axis_z)
 
     cos_t, sin_t = np.cos(theta), np.sin(theta)

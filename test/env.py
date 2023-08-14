@@ -15,14 +15,14 @@ observation, info = env.reset()
 for _ in range(1000):
     as_high = env.action_space.high
     as_low = env.action_space.low
-    anchor_ind = np.array([np.random.randint(0, env.observation_space.shape[0])])
+    anchor_ind = np.array([np.random.randint(0, int(env.observation_space.shape[0] * 0.8))])
     anchor = observation[anchor_ind, :]
+    # anchor = np.mean(observation[:int(env.observation_space.shape[0] * 0.8), :], axis=0)
     params = env.action_space.sample()
     action = as_low + (0.5 * (params + 1.0) * (as_high - as_low)) # (7, )
     axis_y_norm = np.linalg.norm(action[3:6])
     action[3:6] /= axis_y_norm
-    action[:3] = action[:3] + anchor
-    # action = np.concatenate((action,anchor_ind)) # (8, )
+    action[:3] = (action[:3] * 0.02) + anchor
 
     observation, reward, terminated, truncated, info = env.step(action)
 

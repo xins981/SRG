@@ -201,10 +201,9 @@ class Actor(BasePolicy):
         low = th.tensor(self.action_space.low).to(device)
         high = th.tensor(self.action_space.high).to(device)
         untanh_params = low + (0.5 * (tanh_params + 1.0) * (high-low)) # (B, N, 7)
-        
         axis_y_norm = th.norm(untanh_params[:,:,3:6], keepdim=True, dim=-1) # (B, N, 1)
         axis_y_unit = untanh_params[:,:,3:6] / axis_y_norm
-        tcp = untanh_params[:,:,:3] + obs[:,:,:3]
+        tcp = untanh_params[:,:,:3] * 0.05 + obs[:,:,:3]
         rot_radian = untanh_params[:,:,-1].unsqueeze(-1)
         normal_params = th.cat((tcp, axis_y_unit, rot_radian), dim=-1) # (B, N, 7)
         

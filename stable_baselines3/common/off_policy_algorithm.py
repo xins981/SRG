@@ -381,7 +381,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
                 action = as_low + (0.5 * (params + 1.0) * (as_high - as_low)) # (7, )
                 axis_y_norm = np.linalg.norm(action[3:6])
                 action[3:6] /= axis_y_norm
-                action[:3] = action[:3] + anchor
+                action[:3] = (action[:3] * 0.05) + anchor
                 action = np.concatenate((action,anchor_ind))
                 unscaled_action.append(action)
             unscaled_action = np.array(unscaled_action) # (B, 8)
