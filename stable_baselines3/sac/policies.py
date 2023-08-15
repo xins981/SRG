@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type, Union
 import torch as th
 from gymnasium import spaces
 from torch import nn
-import os
+import numpy as np
 
 from stable_baselines3.common.distributions import SquashedDiagGaussianDistribution, StateDependentNoiseDistribution
 from stable_baselines3.common.policies import BasePolicy, ContinuousCritic
@@ -202,9 +202,9 @@ class Actor(BasePolicy):
         high = th.tensor(self.action_space.high).to(device)
         untanh_params = low + (0.5 * (tanh_params + 1.0) * (high-low)) # (B, N, 7)
         axis_y_norm = th.norm(untanh_params[:,:,3:6], keepdim=True, dim=-1) # (B, N, 1)
-        axis_y_unit = untanh_params[:,:,3:6] / axis_y_norm
-        tcp = untanh_params[:,:,:3] * 0.05 + obs[:,:,:3]
-        rot_radian = untanh_params[:,:,-1].unsqueeze(-1)
+        axis_y_unit = untanh_params[:,:,3:6] / axis_y_norm # (B, N, 3)
+        tcp = untanh_params[:,:,:3] + obs[:,:,:3]
+        rot_radian = untanh_params[:,:,-1].unsqueeze(-1) # (B, N, 1)
         normal_params = th.cat((tcp, axis_y_unit, rot_radian), dim=-1) # (B, N, 7)
         
         return normal_params
@@ -393,9 +393,11 @@ class SACPolicy(BasePolicy):
     def forward(self, obs, deterministic, data_dir, rollout):
         
         params_pointwise = self.actor(obs, deterministic=deterministic) # (B, N, 7)
-        q_values = th.cat(self.critic(obs, params_pointwise), dim=2)
-        min_q_values = th.min(q_values, dim=-1).values # (B, N)
-        q_values_distribution = th.nn.functional.softmax(min_q_values/self.boltzmann_beta, dim=-1) # (B, N)
+        q_values = th.cat(self.critic(obs, params_pointwise), dim=2) # (B, N, 2)
+        num_objs = int(self.observation_space.shape[0] * 0.8)
+        q_values = q_values[:,:num_objs,:]
+        min_q_values = th.min(q_values, dim=-1).values # (B, num_objs)
+        q_values_distribution = th.nn.functional.softmax(min_q_values/self.boltzmann_beta, dim=-1) # (B, num_objs)
         if deterministic == True:
             anchor_index = th.max(q_values_distribution, dim=1, keepdim=True).indices # (B, 1)
         else:

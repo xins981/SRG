@@ -1,26 +1,18 @@
-import os, time
+import os, math, datetime, pkgutil
 import numpy as np
 import pybullet as p
-import pybullet_utils.bullet_client as bullet_client
 import gymnasium as gym
 from gymnasium import spaces
-# from robot import UR5Robotiq85, Gripper
 from camera import Camera
-import transformations as tf
-# import utils
-# from utils import Pybullet_Utils
 from uuid import uuid4
 import open3d as o3d
-import math
-import datetime
-
 from pybullet_tools.utils import *
-
 from pybullet_tools.panda_primitives import *
-
 from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF
 from pybullet_tools.ikfast.ikfast import get_ik_joints, either_inverse_kinematics, check_ik_solver
 from utils import *
+
+egl = pkgutil.get_loader('eglRenderer')
 
 HOME_JOINT_VALUES = [0.00, 0.074, 0.00, -1.113, 0.00, 1.510, 0.671, 0.04, 0.04]
 HOME_POSE_GRIPPER = Pose(point=[0, 0, 1], euler=[0, math.radians(180), 0])
@@ -32,22 +24,20 @@ class Environment(gym.Env):
 
     def __init__(self, reward_scale, vis=False):
 
-        self.pcd_dir = f'logs/data/{datetime.datetime.now().strftime("%Y-%m-%d.%H:%M:%S")}'
-        os.makedirs(self.pcd_dir, exist_ok=True)
-
         self.reward_scale = reward_scale
-        approach_radian = np.pi / 2
-        action_min = np.array([-1.0, -1.0, -1.0, -1.0, -1.0, -1.0, -approach_radian])
-        action_max = np.array([1.0, 1.0, 1.0, 1.0, 1.0, 1.0, approach_radian])
+
+        action_min = np.array([-0.05, -0.05, -0.05, -1.0, -1.0, -1.0, 0])
+        action_max = np.array([0.05, 0.05, 0.05, 1.0, 1.0, 1.0, np.pi])
         self.observation_space = spaces.Box(-10.0, 10.0, shape=(5000, 3), dtype=np.float32)
-        self.action_space = spaces.Box(action_min, action_max, shape=(7, ), dtype=np.float32)
+        self.action_space = spaces.Box(action_min, action_max, shape=(7,), dtype=np.float32)
 
         method = p.GUI if vis else p.DIRECT
         sim_id = p.connect(method)
         CLIENTS[sim_id] = True if vis else None
-        draw_global_system(length=0.1)
-        set_camera_pose([1, 1, 1], target_point=[0.5, 0.5, 0.01])
+        # draw_global_system(length=0.1)
+        # set_camera_pose([1, 1, 1], target_point=[0.5, 0.5, 0.01])
         add_data_path()
+        self.plugin = p.loadPlugin(egl.get_filename(), "_eglRendererPlugin")
         enable_gravity()
         with LockRenderer():
             with HideOutput(True):
@@ -73,7 +63,7 @@ class Environment(gym.Env):
                 self.world_from_camera = multiply(world_from_floor, floor_from_camera)
                 self.camera = Camera(self.world_from_camera)
                 self.fixed = [plane, self.floor, tray]
-                draw_pose(self.world_from_camera, length=0.05, width=3)
+                # draw_pose(self.world_from_camera, length=0.05, width=3)
                 
         self.workspace = np.asarray([[0.1, 0.9], 
                                      [0.1, 0.9]])
@@ -157,11 +147,14 @@ class Environment(gym.Env):
         # Read files in object mesh directory
         self.mesh_dir = "resources/objects/blocks/obj"
         self.vhacd_dir = "resources/objects/blocks/vhacd"
-        self.num_obj = 2
+        self.num_obj = 3
         self.mesh_list = os.listdir(self.mesh_dir)
         self.mesh_color = self.color_space[np.asarray(range(self.num_obj)) % 10, :]
         self.mesh_ids = []
         self.mesh_to_urdf = {}
+
+        self.pcd_dir = f'logs/data/{datetime.datetime.now().strftime("%Y-%m-%d.%H:%M:%S")}'
+        os.makedirs(self.pcd_dir, exist_ok=True)
 
 
     #---------------------------------------------------------------------------
@@ -189,8 +182,8 @@ class Environment(gym.Env):
 
     def step(self, action_params):
 
-        camera_from_grasp = to_grasp(action_params)
-        world_from_grasp = multiply(self.world_from_camera, camera_from_grasp)
+        world_from_grasp = to_grasp(action_params)
+        # world_from_grasp = multiply(self.world_from_camera, camera_from_grasp)
         # draw_pose(world_from_grasp, length=0.05, width=3)
         world_from_gripper = multiply(world_from_grasp, self.grasp_from_gripper)
         # draw_pose(world_from_gripper, length=0.05, width=3)
@@ -249,6 +242,8 @@ class Environment(gym.Env):
         else:
             self.close_ee()
             grasped_obj = self.get_grasped_obj()
+            if grasped_obj == None:
+                self.close_ee()
             saved_world = WorldSaver()
             if self.is_grasp_success():
                 world_from_gobj = get_pose(grasped_obj)
@@ -270,7 +265,7 @@ class Environment(gym.Env):
         self.open_ee()
         
         observation = self.get_observation()
-        reward = int(grasp_success) * self.reward_scale
+        reward = int(not grasp_success) * self.reward_scale
         terminated = not self.exist_obj_in_workspace()
         info = {"is_success": grasp_success}
     
@@ -280,13 +275,13 @@ class Environment(gym.Env):
     def close(self):
         
         disconnect()
+        p.unloadPlugin(self.plugin)
     
 
     #---------------------------------------------------------------------------
     # Helper Functions
     #---------------------------------------------------------------------------
     def get_observation(self):
-
         rgb, depth, seg = self.camera.render()
         pts_scene = depth2xyzmap(depth, self.camera.k)
 
@@ -297,47 +292,49 @@ class Environment(gym.Env):
             bg_mask[seg==id] = 1
         floor_mask[seg==self.floor] = 1
         
-        pts_objs = pts_scene[bg_mask==False]
-        pts_floor = pts_scene[floor_mask==True]
+        camera_from_pts_objs = pts_scene[bg_mask==False]
+        camera_from_pts_floor = pts_scene[floor_mask==True]
+        world_from_pts_objs = ((tform_from_pose(self.world_from_camera) @ to_homo(camera_from_pts_objs).T).T)[:,:3]
+        world_from_pts_floor = ((tform_from_pose(self.world_from_camera) @ to_homo(camera_from_pts_floor).T).T)[:,:3]
 
-        colors_objs = rgb[bg_mask==False]
-        colors_floor = rgb[floor_mask==True]
-        # pcd_objs = toOpen3dCloud(pts_objs, colors_objs)
-        # pcd_floor = toOpen3dCloud(pts_floor, colors_floor)
-        # o3d.io.write_point_cloud(f'{pcd_dir}/objs.ply', pcd_objs)
-        # o3d.io.write_point_cloud(f'{pcd_dir}/floor.ply', pcd_floor)
+        colors_objs, colors_floor = rgb[bg_mask==False], rgb[floor_mask==True]
+        pcd_objs = toOpen3dCloud(world_from_pts_objs, colors_objs)
+        pcd_floor = toOpen3dCloud(world_from_pts_floor, colors_floor)
+        o3d.io.write_point_cloud(f'{self.pcd_dir}/objs.ply', pcd_objs)
+        o3d.io.write_point_cloud(f'{self.pcd_dir}/floor.ply', pcd_floor)
 
         num_pts = self.observation_space.shape[0]
         num_obj_pts = int(num_pts * 0.8)
         num_floor_pts = num_pts - num_obj_pts
-        if len(pts_objs) >= num_obj_pts:
-            select_obj_index = np.random.choice(len(pts_objs), num_obj_pts, replace=False)
-        elif len(pts_objs) > 0:
-            select_obj_index = np.random.choice(len(pts_objs), num_obj_pts, replace=True)
+        if len(world_from_pts_objs) >= num_obj_pts:
+            select_obj_index = np.random.choice(len(world_from_pts_objs), num_obj_pts, replace=False)
+        elif len(world_from_pts_objs) > 0:
+            select_obj_index = np.random.choice(len(world_from_pts_objs), num_obj_pts, replace=True)
         else:
-            return pts_floor[np.random.choice(len(pts_floor), num_floor_pts, replace=True)]
+            return world_from_pts_floor[np.random.choice(len(world_from_pts_floor), num_pts, replace=True)]
         
-        if len(pts_floor) >= num_floor_pts:
-            select_floor_index = np.random.choice(len(pts_floor), num_floor_pts, replace=False)
+        if len(world_from_pts_floor) >= num_floor_pts:
+            select_floor_index = np.random.choice(len(world_from_pts_floor), num_floor_pts, replace=False)
         else:
-            select_floor_index = np.random.choice(len(pts_floor), num_floor_pts, replace=True)
+            select_floor_index = np.random.choice(len(world_from_pts_floor), num_floor_pts, replace=True)
 
-        pts_objs, pts_floor = pts_objs[select_obj_index], pts_floor[select_floor_index]
-        observation = np.concatenate((pts_objs, pts_floor), axis=0)
-
+        world_from_pts_objs, world_from_pts_floor = world_from_pts_objs[select_obj_index], world_from_pts_floor[select_floor_index]
+        world_from_observation = np.concatenate((world_from_pts_objs, world_from_pts_floor), axis=0)
+        
         colors_objs, colors_floor = colors_objs[select_obj_index], colors_floor[select_obj_index]
-        pcd_objs = toOpen3dCloud(pts_objs, colors_objs)
-        pcd_floor = toOpen3dCloud(pts_floor, colors_floor)
+        pcd_objs = toOpen3dCloud(world_from_pts_objs, colors_objs)
+        pcd_floor = toOpen3dCloud(world_from_pts_floor, colors_floor)
         o3d.io.write_point_cloud(f'{self.pcd_dir}/objs_down.ply', pcd_objs)
         o3d.io.write_point_cloud(f'{self.pcd_dir}/floor_down.ply', pcd_floor)
 
-        return observation
+        return world_from_observation.astype(np.float32)
     
     
     def add_objects(self):
 
-        obj_mesh_ind = np.random.randint(0, len(self.mesh_list), size=self.num_obj)
-        # obj_mesh_ind = np.array([1])
+        # obj_mesh_ind = np.random.randint(0, len(self.mesh_list), size=self.num_obj)
+        # obj_mesh_ind = np.array([0, 1, 6, 7])
+        obj_mesh_ind = np.array([0, 1, 6])
         for object_idx in range(len(obj_mesh_ind)):
             curr_mesh_file = os.path.join(self.mesh_dir, self.mesh_list[obj_mesh_ind[object_idx]])
             curr_vhacd_file = os.path.join(self.vhacd_dir, self.mesh_list[obj_mesh_ind[object_idx]])
@@ -386,16 +383,11 @@ class Environment(gym.Env):
                 break
 
 
-    def remove_object(self, obj_id):
-        
-        p.removeBody(obj_id)
-        self.mesh_ids.remove(obj_id)
-
-
     def clean_objects(self):
         
         for ob_id in self.mesh_ids:
-            self.remove_object(obj_id=ob_id)
+            p.removeBody(ob_id)
+        self.mesh_ids.clear()
 
 
     def exist_obj_in_workspace(self):

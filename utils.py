@@ -14,13 +14,16 @@ def to_grasp(param):
     axis_y = param[3:6]
     theta = param[6] # approach angle
 
-    axis_z = [0, axis_y[1], -axis_y[2]]
+    axis_z = [axis_y[1], -axis_y[0], 0]
     axis_x = np.cross(axis_y, axis_z)
+    # axis_z = [0, axis_y[1], -axis_y[2]]
+    # axis_x = np.cross(axis_y, axis_z)
 
     cos_t, sin_t = np.cos(theta), np.sin(theta)
     perturbation = np.array([[cos_t, 0, sin_t],
                             [0    , 1,     0],
                             [-sin_t, 0, cos_t]])
+    # perturbation = np.eye(3)
     r = np.stack((axis_x, axis_y, axis_z)).T
     r_iden = normalize_rotation(r)
     
@@ -216,6 +219,12 @@ def save_q_map(pts, q_value, data_dir, rollout):
         file_name = os.path.join(f'{data_dir}/{i:02d}', f'{rollout:05d}.q_vlaue.pcd')
         o3d.io.write_point_cloud(file_name, cloud)
 
+
+def to_homo(pts):
+    
+    assert len(pts.shape)==2, f'pts.shape: {pts.shape}'
+    homo = np.concatenate((pts, np.ones((pts.shape[0],1))),axis=-1)
+    return homo
 
 #---------------------------------------------------------------------------
 # Pybullet Functions

@@ -9,14 +9,21 @@ from stable_baselines3.common.monitor import Monitor
 import os, datetime
 import yaml
 os.environ['DISPLAY'] = ':10.0'
+import gymnasium as gym
+from gymnasium.envs.registration import register
 
+register(
+    id='PandaGrasp-v0',
+    entry_point='environment:Environment',
+    kwargs={'reward_scale': -1, 'vis': False},
+)
 
-def make_env(rank, seed=0, vis=False, max_episode_len=5, reward_scale=10):
+def make_env(rank, seed=0):
     
     def _init():
         
-        env = Environment(vis=vis, max_episode_len=max_episode_len, reward_scale=reward_scale)
-        env = Monitor(env)
+        env = gym.make('PandaGrasp-v0', max_episode_steps=50)
+        # env = Monitor(env)
         env.reset(seed=seed + rank)
         
         return env
@@ -28,18 +35,16 @@ def make_env(rank, seed=0, vis=False, max_episode_len=5, reward_scale=10):
 
 def train():
     
-    experiment_dir = f'logs/experiment/{datetime.datetime.now().strftime('%Y-%m-%d.%H:%M:%S')}'
+    experiment_dir = f'logs/experiment/{datetime.datetime.now().strftime("%Y-%m-%d.%H:%M:%S")}'
     policy_kwargs = dict(features_extractor_class=PointNetExtractor, 
                         features_extractor_kwargs=dict(features_dim=1088),
                         net_arch=[256, 256],
                         boltzmann_beta=5)
     
-    n_training_envs = 64
+    n_training_envs = 24
     # n_eval_envs = 8
-    max_episode_len = 5
-    reward_scale = 10
-    total_timesteps = 150_000_000
-    train_env = SubprocVecEnv([make_env(rank=i, max_episode_len=max_episode_len, reward_scale=reward_scale) for i in range(n_training_envs)])
+    total_timesteps = 1_000_000
+    train_env = SubprocVecEnv([make_env(i) for i in range(n_training_envs)])
     # eval_env = SubprocVecEnv([make_env(rank=i, max_episode_len=max_episode_len, reward_scale=reward_scale) for i in range(n_training_envs, n_training_envs + n_eval_envs)])
 
     for i in range(1, 2): # different hyper-parameters
@@ -54,16 +59,16 @@ def train():
             #                              deterministic=True, eval_freq=max(5000 // n_training_envs, 1), n_eval_episodes=8)
             # callback_list = CallbackList([checkpoint_callback, eval_callback])
 
-            model = SAC(env=train_env, policy='MlpPolicy', policy_kwargs=policy_kwargs, 
-                        gamma=0.8, tau=0.05, batch_size=512, gradient_steps=8, learning_starts=1000, 
-                        blm_update_step=50000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
+            model = SAC('MlpPolicy', train_env, policy_kwargs=policy_kwargs, 
+                        batch_size=64, gradient_steps=2, learning_starts=0, 
+                        blm_update_step=20000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
             # model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
             model.learn(total_timesteps=total_timesteps)
             
             with open(f'{session_dir}/hyparam.yaml','a') as f:
                 hyparam_dict = {
-                    'max episode step': max_episode_len,
-                    'reward scale': reward_scale,
+                    'max episode step': 50,
+                    'reward scale': -1,
                     'total timesteps': total_timesteps,
                     'env number': model.n_envs,
                     'buffer size': model.buffer_size,

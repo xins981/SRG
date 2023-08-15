@@ -1,6 +1,5 @@
 import gymnasium as gym
 import numpy as np
-# from environment import Environment
 from gymnasium.envs.registration import register
 
 register(
@@ -16,15 +15,15 @@ for _ in range(1000):
     as_high = env.action_space.high
     as_low = env.action_space.low
     anchor_ind = np.array([np.random.randint(0, int(env.observation_space.shape[0] * 0.8))])
-    anchor = observation[anchor_ind, :]
+    anchor = observation[anchor_ind, :3]
     # anchor = np.mean(observation[:int(env.observation_space.shape[0] * 0.8), :], axis=0)
-    params = env.action_space.sample()
-    action = as_low + (0.5 * (params + 1.0) * (as_high - as_low)) # (7, )
-    axis_y_norm = np.linalg.norm(action[3:6])
-    action[3:6] /= axis_y_norm
-    action[:3] = (action[:3] * 0.02) + anchor
+    unscaled_params = env.action_space.sample()
+    axis_y_norm = np.linalg.norm(unscaled_params[3:6])
+    unscaled_params[:3] = (unscaled_params[:3] * 0.05) + anchor
+    unscaled_params[3:6] /= axis_y_norm
+    unscaled_params[6] = (0.5 * (unscaled_params[6] + 1.0) * np.pi)
 
-    observation, reward, terminated, truncated, info = env.step(action)
+    observation, reward, terminated, truncated, info = env.step(unscaled_params)
 
     if terminated or truncated:
         observation, info = env.reset()

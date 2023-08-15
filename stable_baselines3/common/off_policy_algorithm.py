@@ -20,7 +20,6 @@ from stable_baselines3.common.type_aliases import GymEnv, MaybeCallback, Rollout
 from stable_baselines3.common.utils import safe_mean, should_collect_more_steps
 from stable_baselines3.common.vec_env import VecEnv
 from stable_baselines3.her.her_replay_buffer import HerReplayBuffer
-import yaml
 SelfOffPolicyAlgorithm = TypeVar("SelfOffPolicyAlgorithm", bound="OffPolicyAlgorithm")
 
 
@@ -369,29 +368,25 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         
         # Select action randomly or according to policy
         if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup):
-            
-            # Warmup phase
-            unscaled_action = []
-            as_high = self.action_space.high
-            as_low = self.action_space.low
+            unscaled_params = []
+            action_high = self.action_space.high
+            action_low = self.action_space.low
             for i in range(n_envs):
-                anchor_ind = np.array([np.random.randint(0, self.observation_space.shape[1])])
-                anchor = self._last_obs[i, anchor_ind, :]
-                params = self.action_space.sample()
-                action = as_low + (0.5 * (params + 1.0) * (as_high - as_low)) # (7, )
-                axis_y_norm = np.linalg.norm(action[3:6])
-                action[3:6] /= axis_y_norm
-                action[:3] = (action[:3] * 0.05) + anchor
-                action = np.concatenate((action,anchor_ind))
-                unscaled_action.append(action)
-            unscaled_action = np.array(unscaled_action) # (B, 8)
+                anchor_ind = np.array([np.random.randint(0, self.observation_space.shape[0])])
+                anchor = self._last_obs[i, anchor_ind, :3]
+                unscaled_param = self.action_space.sample()
+                axis_y_norm = np.linalg.norm(unscaled_param[3:6])
+                unscaled_param[3:6] /= axis_y_norm
+                unscaled_param[:3] += anchor
+                unscaled_param = np.concatenate((unscaled_param, anchor_ind))
+                unscaled_params.append(unscaled_param)
+            unscaled_params = np.array(unscaled_params) # (B, 8)
         else:
-
             # Note: when using continuous actions,
             # we assume that the policy uses tanh to scale the action
             # We use non-deterministic action in the case of SAC, for TD3, it does not matter
             data_dir = f'{self.tensorboard_log}/data'
-            unscaled_action, _ = self.predict(self._last_obs, deterministic=False, rollout=int(self.num_timesteps/n_envs), data_dir=data_dir) # （B, 8)
+            unscaled_params, _ = self.predict(self._last_obs, deterministic=False, rollout=int(self.num_timesteps/n_envs), data_dir=data_dir) # （B, 8)
 
         # Rescale the action from [low, high] to [-1, 1]
         # if isinstance(self.action_space, spaces.Box):
@@ -409,10 +404,10 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         #     buffer_action = unscaled_action
         #     action = buffer_action
 
-        buffer_action = unscaled_action
-        action = buffer_action[:,:np.prod(self.action_space.shape)]
+        buffer_params = unscaled_params
+        params = buffer_params[:,:np.prod(self.action_space.shape)]
         
-        return action, buffer_action
+        return params, buffer_params
 
 
     def _dump_logs(self) -> None:
