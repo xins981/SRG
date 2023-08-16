@@ -394,10 +394,10 @@ class SACPolicy(BasePolicy):
         
         params_pointwise = self.actor(obs, deterministic=deterministic) # (B, N, 7)
         q_values = th.cat(self.critic(obs, params_pointwise), dim=2) # (B, N, 2)
-        num_objs = int(self.observation_space.shape[0] * 0.8)
-        q_values = q_values[:,:num_objs,:]
         min_q_values = th.min(q_values, dim=-1).values # (B, num_objs)
-        q_values_distribution = th.nn.functional.softmax(min_q_values/self.boltzmann_beta, dim=-1) # (B, num_objs)
+        num_objs = int(self.observation_space.shape[0] * 0.8)
+        obj_min_q_values = min_q_values[:,:num_objs] # (B, num_objs)
+        q_values_distribution = th.nn.functional.softmax(obj_min_q_values/self.boltzmann_beta, dim=-1) # (B, num_objs)
         if deterministic == True:
             anchor_index = th.max(q_values_distribution, dim=1, keepdim=True).indices # (B, 1)
         else:

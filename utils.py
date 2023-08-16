@@ -184,10 +184,12 @@ def normalizeRotation(pose):
 def save_pcd(pts, data_dir, rollout):
 
     data_dir = f'{data_dir}/pcd'
-    if rollout == 1:
-        for i in range(pts.shape[0]):
-            pcd_dir = f'{data_dir}/{i:02d}'
-            os.makedirs(pcd_dir, exist_ok=True)
+    for i in range(pts.shape[0]):
+        pcd_dir = f'{data_dir}/{i:02d}'
+        if not os.path.exists(pcd_dir):
+            os.makedirs(pcd_dir)
+        elif i == 0:
+            break
 
     for i, batch in enumerate(pts):
         cloud = toOpen3dCloud(batch)
@@ -198,10 +200,12 @@ def save_pcd(pts, data_dir, rollout):
 def save_q_map(pts, q_value, data_dir, rollout):
     
     data_dir = f'{data_dir}/q_map'
-    if rollout == 1:
-        for i in range(pts.shape[0]):
-            q_map_dir = f'{data_dir}/{i:02d}'
-            os.makedirs(q_map_dir, exist_ok=True)
+    for i in range(pts.shape[0]):
+        q_map_dir = f'{data_dir}/{i:02d}'
+        if not os.path.exists(q_map_dir):
+            os.makedirs(q_map_dir)
+        elif i == 0:
+            break
 
     colors = [(0, 0, 1), (1, 0, 0)]  # Blue to red
     n_bins = 100  # Number of bins to represent the gradient

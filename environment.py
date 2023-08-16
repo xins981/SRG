@@ -105,7 +105,7 @@ class Environment(gym.Env):
         # self.ee_open_values = get_max_limits(self.robot, self.finger_joints)
         
         self.finger_joints = joints_from_names(self.gripper, ["panda_finger_joint1", "panda_finger_joint2"])
-        
+        self.finger_links = links_from_names(self.gripper, ['panda_leftfinger', 'panda_rightfinger'])
         # self.gripper_from_approach = Pose(point=[0,0,-0.03])
         self.grasp_from_gripper = Pose(point=[0,0,-0.1])
         
@@ -153,8 +153,8 @@ class Environment(gym.Env):
         self.mesh_ids = []
         self.mesh_to_urdf = {}
 
-        self.pcd_dir = f'logs/data/{datetime.datetime.now().strftime("%Y-%m-%d.%H:%M:%S")}'
-        os.makedirs(self.pcd_dir, exist_ok=True)
+        # self.pcd_dir = f'logs/data/{datetime.datetime.now().strftime("%Y-%m-%d.%H:%M:%S")}'
+        # os.makedirs(self.pcd_dir, exist_ok=True)
 
 
     #---------------------------------------------------------------------------
@@ -175,6 +175,9 @@ class Environment(gym.Env):
         set_configuration(self.gripper, CONF_OPEN)
         self.clean_objects()
         self.add_objects()
+        while self.sim_until_stable() == False:
+            self.clean_objects()
+            self.add_objects()
         observation = self.get_observation()
         
         return observation, {}
@@ -183,9 +186,9 @@ class Environment(gym.Env):
     def step(self, action_params):
 
         world_from_grasp = to_grasp(action_params)
+        world_from_gripper = multiply(world_from_grasp, self.grasp_from_gripper)
         # world_from_grasp = multiply(self.world_from_camera, camera_from_grasp)
         # draw_pose(world_from_grasp, length=0.05, width=3)
-        world_from_gripper = multiply(world_from_grasp, self.grasp_from_gripper)
         # draw_pose(world_from_gripper, length=0.05, width=3)
 
         # world_from_approach = multiply(world_from_gripper, self.gripper_from_approach)
@@ -242,24 +245,25 @@ class Environment(gym.Env):
         else:
             self.close_ee()
             grasped_obj = self.get_grasped_obj()
-            if grasped_obj == None:
-                self.close_ee()
-            saved_world = WorldSaver()
-            if self.is_grasp_success():
-                world_from_gobj = get_pose(grasped_obj)
-                gripper_from_world = invert(world_from_gripper)
-                gripper_from_gobj = multiply(gripper_from_world, world_from_gobj)
-                set_point(self.gripper, [0.5, 0.5, 0.5])
-                world_from_gripper = get_pose(self.gripper)
-                world_from_gobj = multiply(world_from_gripper, gripper_from_gobj)
-                set_pose(grasped_obj, world_from_gobj)
-                self.sim_until_stable()
-            grasp_success = self.is_grasp_success()
-            if grasp_success == True:
-                set_pose(grasped_obj, Pose(point=[0.5, -0.5, 0.5]))
-                self.sim_until_stable()
+            if grasped_obj != None:
+                saved_world = WorldSaver()
+                if self.is_grasp_success():
+                    world_from_gobj = get_pose(grasped_obj)
+                    gripper_from_world = invert(world_from_gripper)
+                    gripper_from_gobj = multiply(gripper_from_world, world_from_gobj)
+                    set_point(self.gripper, [0.5, 0.5, 0.5])
+                    world_from_gripper = get_pose(self.gripper)
+                    world_from_gobj = multiply(world_from_gripper, gripper_from_gobj)
+                    set_pose(grasped_obj, world_from_gobj)
+                    self.sim_until_stable()
+                grasp_success = self.is_grasp_success()
+                if grasp_success == True:
+                    set_point(grasped_obj, [0.5, -0.5, 0.5])
+                    self.sim_until_stable()
+                else:
+                    saved_world.restore()
             else:
-                saved_world.restore()
+                grasp_success = False
             
         set_pose(self.gripper, HOME_POSE_GRIPPER)
         self.open_ee()
@@ -297,11 +301,11 @@ class Environment(gym.Env):
         world_from_pts_objs = ((tform_from_pose(self.world_from_camera) @ to_homo(camera_from_pts_objs).T).T)[:,:3]
         world_from_pts_floor = ((tform_from_pose(self.world_from_camera) @ to_homo(camera_from_pts_floor).T).T)[:,:3]
 
-        colors_objs, colors_floor = rgb[bg_mask==False], rgb[floor_mask==True]
-        pcd_objs = toOpen3dCloud(world_from_pts_objs, colors_objs)
-        pcd_floor = toOpen3dCloud(world_from_pts_floor, colors_floor)
-        o3d.io.write_point_cloud(f'{self.pcd_dir}/objs.ply', pcd_objs)
-        o3d.io.write_point_cloud(f'{self.pcd_dir}/floor.ply', pcd_floor)
+        # colors_objs, colors_floor = rgb[bg_mask==False], rgb[floor_mask==True]
+        # pcd_objs = toOpen3dCloud(world_from_pts_objs, colors_objs)
+        # pcd_floor = toOpen3dCloud(world_from_pts_floor, colors_floor)
+        # o3d.io.write_point_cloud(f'{self.pcd_dir}/objs.ply', pcd_objs)
+        # o3d.io.write_point_cloud(f'{self.pcd_dir}/floor.ply', pcd_floor)
 
         num_pts = self.observation_space.shape[0]
         num_obj_pts = int(num_pts * 0.8)
@@ -321,11 +325,11 @@ class Environment(gym.Env):
         world_from_pts_objs, world_from_pts_floor = world_from_pts_objs[select_obj_index], world_from_pts_floor[select_floor_index]
         world_from_observation = np.concatenate((world_from_pts_objs, world_from_pts_floor), axis=0)
         
-        colors_objs, colors_floor = colors_objs[select_obj_index], colors_floor[select_obj_index]
-        pcd_objs = toOpen3dCloud(world_from_pts_objs, colors_objs)
-        pcd_floor = toOpen3dCloud(world_from_pts_floor, colors_floor)
-        o3d.io.write_point_cloud(f'{self.pcd_dir}/objs_down.ply', pcd_objs)
-        o3d.io.write_point_cloud(f'{self.pcd_dir}/floor_down.ply', pcd_floor)
+        # colors_objs, colors_floor = colors_objs[select_obj_index], colors_floor[select_obj_index]
+        # pcd_objs = toOpen3dCloud(world_from_pts_objs, colors_objs)
+        # pcd_floor = toOpen3dCloud(world_from_pts_floor, colors_floor)
+        # o3d.io.write_point_cloud(f'{self.pcd_dir}/objs_down.ply', pcd_objs)
+        # o3d.io.write_point_cloud(f'{self.pcd_dir}/floor_down.ply', pcd_floor)
 
         return world_from_observation.astype(np.float32)
     
@@ -349,13 +353,12 @@ class Environment(gym.Env):
             set_color(obj_id, object_color)
             p.changeDynamics(obj_id, -1, lateralFriction=0.7, spinningFriction=0.7, collisionMargin=0.0001)
             self.mesh_ids.append(obj_id)
-        
-        self.sim_until_stable()
     
 
     def sim_until_stable(self):
         
-        while 1:
+        count = 0
+        while count < 2000:
             last_pos = {}
             accum_motions = {}
         
@@ -366,6 +369,7 @@ class Environment(gym.Env):
             stabled = True
             for _ in range(50):
                 p.stepSimulation()
+                count += 1
                 for body_id in self.mesh_ids:
                     cur_pos =  np.array(get_point(body_id))
                     motion = np.linalg.norm(cur_pos - last_pos[body_id])
@@ -381,6 +385,7 @@ class Environment(gym.Env):
                 for body_id in self.mesh_ids:
                     p.resetBaseVelocity(body_id, linearVelocity=[0,0,0], angularVelocity=[0,0,0])
                 break
+        return (count < 2000)
 
 
     def clean_objects(self):
@@ -404,10 +409,9 @@ class Environment(gym.Env):
         
         for ob_id in self.mesh_ids:
             # if body_collision(self.robot, ob_id) == False:
-            if body_collision(self.gripper, ob_id) == False:
-                continue
-            return ob_id
-    
+            if any_link_pair_collision(self.gripper, self.finger_links, ob_id) == True:
+                return ob_id
+
 
     def close_ee(self):
         

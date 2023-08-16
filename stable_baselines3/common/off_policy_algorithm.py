@@ -369,11 +369,9 @@ class OffPolicyAlgorithm(BaseAlgorithm):
         # Select action randomly or according to policy
         if self.num_timesteps < learning_starts and not (self.use_sde and self.use_sde_at_warmup):
             unscaled_params = []
-            action_high = self.action_space.high
-            action_low = self.action_space.low
             for i in range(n_envs):
                 anchor_ind = np.array([np.random.randint(0, self.observation_space.shape[0])])
-                anchor = self._last_obs[i, anchor_ind, :3]
+                anchor = self._last_obs[i, anchor_ind, :3].squeeze()
                 unscaled_param = self.action_space.sample()
                 axis_y_norm = np.linalg.norm(unscaled_param[3:6])
                 unscaled_param[3:6] /= axis_y_norm

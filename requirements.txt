@@ -10,3 +10,5 @@ trimesh
 autolab_core
 tensorboard
 gymnasium
+tqdm
+rich

@@ -60,10 +60,10 @@ def train():
             # callback_list = CallbackList([checkpoint_callback, eval_callback])
 
             model = SAC('MlpPolicy', train_env, policy_kwargs=policy_kwargs, 
-                        batch_size=64, gradient_steps=2, learning_starts=0, 
+                        batch_size=64, gradient_steps=1, learning_starts=1000, 
                         blm_update_step=20000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
             # model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
-            model.learn(total_timesteps=total_timesteps)
+            model.learn(total_timesteps=total_timesteps, progress_bar=True)
             
             with open(f'{session_dir}/hyparam.yaml','a') as f:
                 hyparam_dict = {
