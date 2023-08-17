@@ -53,8 +53,10 @@ def train():
 
             session_dir = f'{experiment_dir}/trial_{i}/session_{j}'
             
-            # checkpoint_callback = CheckpointCallback(save_freq=max(100000 // n_training_envs, 1), save_path=f'{session_dir}/checkpoints', 
-            #                                          name_prefix='sac_model', save_replay_buffer=True)
+            checkpoint_callback = CheckpointCallback(save_freq=max(100000 // n_training_envs, 1), 
+                                                     save_path=f'{session_dir}/checkpoints', 
+                                                     name_prefix='sac_model', 
+                                                     save_replay_buffer=True)
             # eval_callback = EvalCallback(eval_env, best_model_save_path=session_dir, log_path=session_dir, 
             #                              deterministic=True, eval_freq=max(5000 // n_training_envs, 1), n_eval_episodes=8)
             # callback_list = CallbackList([checkpoint_callback, eval_callback])
@@ -62,8 +64,8 @@ def train():
             model = SAC('MlpPolicy', train_env, policy_kwargs=policy_kwargs, 
                         batch_size=64, gradient_steps=1, learning_starts=1000, 
                         blm_update_step=20000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
-            # model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback)
-            model.learn(total_timesteps=total_timesteps, progress_bar=True)
+            model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback, progress_bar=True)
+            # model.learn(total_timesteps=total_timesteps, progress_bar=True)
             
             with open(f'{session_dir}/hyparam.yaml','a') as f:
                 hyparam_dict = {
@@ -101,8 +103,12 @@ def eval(model_dir, log_dir):
 
 if __name__ == '__main__':
     
-    train()
+    # train()
 
+    loaded_model = SAC.load('logs/experiment/2023-08-16.11:03:11/trial_1/session_1/trained_model.zip', verbose=1)
+    loaded_model.set_env(SubprocVecEnv([make_env(i) for i in range(24)]))
+    loaded_model.load_replay_buffer('logs/experiment/2023-08-16.11:03:11/trial_1/session_1/trained_model_replay_buffer.pkl')
+    loaded_model.learn(1_000_000, reset_num_timesteps=False, progress_bar=True)
     # eval(model_dir='logs/experiment/2023-07-27.12:13:10/trial_1/session_1/best_model.zip', 
     #      log_dir='logs/experiment/2023-07-24.22:16:04/trial_1/session_1/eval')
 

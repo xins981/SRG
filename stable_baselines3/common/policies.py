@@ -959,18 +959,14 @@ class ContinuousCritic(BaseModel):
         with th.set_grad_enabled(not self.share_features_extractor):
             features = self.extract_features(obs, self.features_extractor) # (B, N, 1088)
         
-        if len(actions.shape) < 3: # (B, 8)
-            anchor_index = actions[:,np.prod(self.action_space.shape)].unsqueeze(-1) # (B, 1)
-            anchor_index = anchor_index.to(th.int64)
-            anchor_index = anchor_index.unsqueeze(-1).expand(-1, -1, self.features_extractor.features_dim)
-            actions = actions[:,:np.prod(self.action_space.shape)]
-            features = th.gather(features, 1, anchor_index).squeeze(1)
-            qvalue_input = th.cat([features, actions], dim=1) # (B, features_dim + 7)
-            return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, 1)
-        else:
-            qvalue_input = th.cat([features, actions], dim=-1) # (B, N, 1098)
-            return tuple(q_net(qvalue_input) for q_net in self.q_networks) # (B, N, 1)
-
+        anchor_index = actions[:, -1].unsqueeze(-1).long() # (B, 1)
+        # anchor_index = anchor_index.to(th.int64)
+        # anchor_index = anchor_index.unsqueeze(-1).expand(-1, -1, features.shape[-1])
+        params = actions[:,:np.prod(self.action_space.shape)] # (B, 7)
+        features = th.gather(features, 1, anchor_index.unsqueeze(-1).expand(-1, -1, features.shape[-1])).squeeze(1) # (B, 1088)
+        qvalue_input = th.cat([features, params], dim=1) # (B, features_dim + 7)
+        return tuple(q_net(qvalue_input) for q_net in self.q_networks) # 2 * (B, 1)
+        
 
     def q1_forward(self, obs: th.Tensor, actions: th.Tensor) -> th.Tensor:
         """

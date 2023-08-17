@@ -165,8 +165,8 @@ class SAC(OffPolicyAlgorithm):
             if self.use_sde:
                 self.actor.reset_noise()
 
-            # Action by the current actor for the sampled state; new_params:(B, N, 7), new_log_prob:(B, N).
-            new_params, new_log_prob = self.actor.action_log_prob(replay_data.observations)
+            # Action by the current actor for the sampled state; new_params:(B, K, 8), new_log_prob:(B, K).
+            new_params, new_log_prob, new_center_pc_score = self.actor.action_log_prob(replay_data.observations)
             
             if self.log_ent_coef is not None:
                 ent_coef = th.exp(self.log_ent_coef.detach())
@@ -176,19 +176,17 @@ class SAC(OffPolicyAlgorithm):
             ent_coefs.append(ent_coef.item())
 
             with th.no_grad():
-                # Select action according to policy; next_params:(B, N, 7), next_log_prob:(B, N).
-                next_params, next_log_prob = self.actor.action_log_prob(replay_data.next_observations)
-                # Compute the next Q values: min over all critics targets
-                next_q = th.cat(self.critic_target(replay_data.next_observations, next_params), dim=2).min(dim=2).values # (B, N)
-                next_location_prob = th.nn.functional.softmax(next_q/self.policy.boltzmann_beta, dim=1) # (B, N)
-                next_anchor_index = next_location_prob.multinomial(num_samples=1) # (B, 1)
-                next_action_location_prob = th.gather(next_location_prob.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+                next_params, next_log_prob, next_center_pc_score = self.actor.action_log_prob(replay_data.next_observations)
+                next_score_prob = th.nn.functional.softmax(next_center_pc_score/self.policy.boltzmann_beta, dim=1) # (B, N)
+                next_anchor_index = next_score_prob.multinomial(num_samples=1) # (B, 1)
+                next_action_score_prob = th.gather(next_score_prob.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
                 next_action_log_prob = th.gather(next_log_prob.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
-                next_joint_log_prob = th.log(next_action_location_prob) + next_action_log_prob # (B, )
-                next_action_q = th.gather(next_q.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+                next_joint_log_prob = th.log(next_action_score_prob) + next_action_log_prob # (B, )
+                next_param = th.gather(next_params, 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, next_params.shape[-1])).squeeze() # (B, 8)
+                next_q = th.cat(self.critic_target(replay_data.next_observations, next_param), dim=2).min(dim=2).values # (B, 1)
                 
                 # add entropy term
-                next_q_value_with_entropy = next_action_q - ent_coef * next_joint_log_prob # (B, )
+                next_q_value_with_entropy = next_q - ent_coef * next_joint_log_prob # (B, )
                 
                 # td error + entropy term; rewards:(B, 1), dones:(B, 1).
                 target_q = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_value_with_entropy.unsqueeze(-1)
@@ -212,14 +210,14 @@ class SAC(OffPolicyAlgorithm):
             # Alternative: actor_loss = th.mean(log_prob - qf1_pi)
             # Min over all critic networks
             self.critic.requires_grad_(False)
-            new_q = th.cat(self.critic(replay_data.observations, new_params), dim=2).min(dim=2).values # (B, N)
-            new_location_prob = th.nn.functional.softmax(new_q/self.policy.boltzmann_beta, dim=1) # (B, N)
-            new_anchor_index = new_location_prob.multinomial(num_samples=1) # (B, 1)
-            new_action_location_prob = th.gather(new_location_prob.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
+            new_score_prob = th.nn.functional.softmax(new_center_pc_score/self.policy.boltzmann_beta, dim=1) # (B, K)
+            new_anchor_index = new_score_prob.multinomial(num_samples=1) # (B, 1)
+            new_action_score_prob = th.gather(new_score_prob.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
             new_action_log_prob = th.gather(new_log_prob.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
-            new_joint_log_prob = th.log(new_action_location_prob) + new_action_log_prob # (B, )
-            new_action_q = th.gather(new_q.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
-            actor_loss = (ent_coef * new_joint_log_prob - new_action_q).mean()
+            new_joint_log_prob = th.log(new_action_score_prob) + new_action_log_prob # (B, )
+            new_param = th.gather(new_params, 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, new_params.shape[-1])).squeeze() # (B, 8)
+            new_q = th.cat(self.critic(replay_data.observations, new_param), dim=2).min(dim=2).values # (B, 1)
+            actor_loss = (ent_coef * new_joint_log_prob - new_q).mean()
             actor_losses.append(actor_loss.item())
            
             # Optimize the actor
