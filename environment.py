@@ -11,6 +11,7 @@ from pybullet_tools.panda_primitives import *
 from pybullet_tools.ikfast.franka_panda.ik import PANDA_INFO, FRANKA_URDF
 from pybullet_tools.ikfast.ikfast import get_ik_joints, either_inverse_kinematics, check_ik_solver
 from utils import *
+import yaml
 
 egl = pkgutil.get_loader('eglRenderer')
 
@@ -145,11 +146,15 @@ class Environment(gym.Env):
                                         [255, 157, 167]])/255.0 #pink
 
         # Read files in object mesh directory
-        self.mesh_dir = "resources/objects/blocks/obj"
-        self.vhacd_dir = "resources/objects/blocks/vhacd"
-        self.num_obj = 3
-        self.mesh_list = os.listdir(self.mesh_dir)
-        self.mesh_color = self.color_space[np.asarray(range(self.num_obj)) % 10, :]
+        # self.mesh_dir = "resources/objects/blocks/obj"
+        # self.vhacd_dir = "resources/objects/blocks/vhacd"
+        mesh_dir = "resources/objects/ycb"
+        with open(f'{mesh_dir}/config.yml','r') as ff:
+            cfg = yaml.safe_load(ff)
+        self.obj_files = []
+        for name in cfg['load_obj']:
+            self.obj_files.append(f'{mesh_dir}/{name}.obj')
+        
         self.mesh_ids = []
         self.mesh_to_urdf = {}
 
@@ -239,9 +244,11 @@ class Environment(gym.Env):
         #     print("no approach ik solution")
         #     grasp_success = False
 
+        is_collision = False
         set_pose(self.gripper, world_from_gripper)
         if any(pairwise_collision(self.gripper, b) for b in (self.fixed+self.mesh_ids)):
             grasp_success = False
+            is_collision = True
         else:
             self.close_ee()
             grasped_obj = self.get_grasped_obj()
@@ -271,7 +278,7 @@ class Environment(gym.Env):
         observation = self.get_observation()
         reward = int(not grasp_success) * self.reward_scale
         terminated = not self.exist_obj_in_workspace()
-        info = {"is_success": grasp_success}
+        info = {"is_success": grasp_success, 'is_collision': is_collision}
     
         return observation, reward, terminated, False, info
 
@@ -335,22 +342,14 @@ class Environment(gym.Env):
     
     
     def add_objects(self):
-
-        # obj_mesh_ind = np.random.randint(0, len(self.mesh_list), size=self.num_obj)
-        # obj_mesh_ind = np.array([0, 1, 6, 7])
-        obj_mesh_ind = np.array([0, 1, 6])
-        for object_idx in range(len(obj_mesh_ind)):
-            curr_mesh_file = os.path.join(self.mesh_dir, self.mesh_list[obj_mesh_ind[object_idx]])
-            curr_vhacd_file = os.path.join(self.vhacd_dir, self.mesh_list[obj_mesh_ind[object_idx]])
-            
+        for obj_path in self.obj_files:
+            vhacd_path = obj_path.replace('.obj', '_vhacd.obj')
             drop_x = (self.workspace[0][1] - self.workspace[0][0] - 0.2) * np.random.random_sample() + self.workspace[0][0] + 0.1
             drop_y = (self.workspace[1][1] - self.workspace[1][0] - 0.2) * np.random.random_sample() + self.workspace[1][0] + 0.1
             object_position = [drop_x, drop_y, 0.15]
             object_orientation = [2*np.pi*np.random.random_sample(), 2*np.pi*np.random.random_sample(), 2*np.pi*np.random.random_sample()]
-            object_color = [self.mesh_color[object_idx][0], self.mesh_color[object_idx][1], self.mesh_color[object_idx][2], 1]
-            obj_id = self.load_mesh(mesh_file=curr_mesh_file, mesh_pose=Pose(object_position, object_orientation), 
-                                    mass=0.1, vhacd_file=curr_vhacd_file, scale=[1.2, 1.2, 1.2])
-            set_color(obj_id, object_color)
+            obj_id = self.load_mesh(mesh_file=obj_path, mesh_pose=Pose(object_position, object_orientation), 
+                                    mass=0.1, vhacd_file=vhacd_path, scale=[1, 1, 1])
             p.changeDynamics(obj_id, -1, lateralFriction=0.7, spinningFriction=0.7, collisionMargin=0.0001)
             self.mesh_ids.append(obj_id)
     

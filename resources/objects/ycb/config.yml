@@ -1,0 +1,26 @@
+total_obj:
+    [
+        '002_master_chef_can', 
+        '003_cracker_box', 
+        '004_sugar_box', 
+        '005_tomato_soup_can', 
+        '006_mustard_bottle', 
+        '007_tuna_fish_can', 
+        '008_pudding_box', 
+        '009_gelatin_box', 
+        '010_potted_meat_can',
+        '011_banana', 
+        '012_strawberry', 
+        '013_apple', 
+        '014_lemon', 
+        '015_peach', 
+        '016_pear', 
+        '017_orange', 
+        '018_plum', 
+    ]
+
+load_obj:
+    [
+        '004_sugar_box', 
+        '011_banana', 
+    ]
