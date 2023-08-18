@@ -109,6 +109,7 @@ if __name__ == '__main__':
     loaded_model.set_env(SubprocVecEnv([make_env(i) for i in range(24)]))
     loaded_model.load_replay_buffer('logs/experiment/2023-08-16.11:03:11/trial_1/session_1/trained_model_replay_buffer.pkl')
     loaded_model.learn(1_000_000, reset_num_timesteps=False, progress_bar=True)
+    
     # eval(model_dir='logs/experiment/2023-07-27.12:13:10/trial_1/session_1/best_model.zip', 
     #      log_dir='logs/experiment/2023-07-24.22:16:04/trial_1/session_1/eval')
 
