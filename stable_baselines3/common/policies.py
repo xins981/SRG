@@ -964,7 +964,7 @@ class ContinuousCritic(BaseModel):
         # anchor_index = anchor_index.unsqueeze(-1).expand(-1, -1, features.shape[-1])
         params = actions[:,:np.prod(self.action_space.shape)] # (B, 7)
         features = th.gather(features, 1, anchor_index.unsqueeze(-1).expand(-1, -1, features.shape[-1])).squeeze(1) # (B, 1088)
-        qvalue_input = th.cat([features, params], dim=1) # (B, features_dim + 7)
+        qvalue_input = th.cat((features, params), dim=-1) # (B, features_dim + 7)
         return tuple(q_net(qvalue_input) for q_net in self.q_networks) # 2 * (B, 1)
         
 

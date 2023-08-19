@@ -153,7 +153,7 @@ class Environment(gym.Env):
             cfg = yaml.safe_load(ff)
         self.obj_files = []
         for name in cfg['load_obj']:
-            self.obj_files.append(f'{mesh_dir}/{name}.obj')
+            self.obj_files.append(os.path.join(mesh_dir, f'{name}.obj'))
         
         self.mesh_ids = []
         self.mesh_to_urdf = {}
@@ -344,9 +344,9 @@ class Environment(gym.Env):
     def add_objects(self):
         for obj_path in self.obj_files:
             vhacd_path = obj_path.replace('.obj', '_vhacd.obj')
-            drop_x = (self.workspace[0][1] - self.workspace[0][0] - 0.2) * np.random.random_sample() + self.workspace[0][0] + 0.1
-            drop_y = (self.workspace[1][1] - self.workspace[1][0] - 0.2) * np.random.random_sample() + self.workspace[1][0] + 0.1
-            object_position = [drop_x, drop_y, 0.15]
+            drop_x = (self.workspace[0][1] - self.workspace[0][0] - 0.4) * np.random.random_sample() + self.workspace[0][0] + 0.2
+            drop_y = (self.workspace[1][1] - self.workspace[1][0] - 0.4) * np.random.random_sample() + self.workspace[1][0] + 0.2
+            object_position = [drop_x, drop_y, 0.4]
             object_orientation = [2*np.pi*np.random.random_sample(), 2*np.pi*np.random.random_sample(), 2*np.pi*np.random.random_sample()]
             obj_id = self.load_mesh(mesh_file=obj_path, mesh_pose=Pose(object_position, object_orientation), 
                                     mass=0.1, vhacd_file=vhacd_path, scale=[1, 1, 1])

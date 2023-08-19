@@ -23,7 +23,7 @@ def make_env(rank, seed=0):
     def _init():
         
         env = gym.make('PandaGrasp-v0', max_episode_steps=50)
-        # env = Monitor(env)
+        env = Monitor(env)
         env.reset(seed=seed + rank)
         
         return env
@@ -38,12 +38,12 @@ def train():
     experiment_dir = f'logs/experiment/{datetime.datetime.now().strftime("%Y-%m-%d.%H:%M:%S")}'
     policy_kwargs = dict(features_extractor_class=PointNetExtractor, 
                         features_extractor_kwargs=dict(features_dim=1088),
-                        net_arch=[256, 256],
+                        net_arch=[128, 128],
                         boltzmann_beta=5)
     
-    n_training_envs = 24
+    n_training_envs = 27
     # n_eval_envs = 8
-    total_timesteps = 1_000_000
+    total_timesteps = 2_000_000
     train_env = SubprocVecEnv([make_env(i) for i in range(n_training_envs)])
     # eval_env = SubprocVecEnv([make_env(rank=i, max_episode_len=max_episode_len, reward_scale=reward_scale) for i in range(n_training_envs, n_training_envs + n_eval_envs)])
 
@@ -62,10 +62,10 @@ def train():
             # callback_list = CallbackList([checkpoint_callback, eval_callback])
 
             model = SAC('MlpPolicy', train_env, policy_kwargs=policy_kwargs, 
-                        batch_size=64, gradient_steps=1, learning_starts=1000, 
-                        blm_update_step=20000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
+                        batch_size=28, gradient_steps=1, learning_starts=0, 
+                        blm_update_step=10000, blm_end=0.1, tensorboard_log=session_dir, verbose=1)
             model.learn(total_timesteps=total_timesteps, callback=checkpoint_callback, progress_bar=True)
-            # model.learn(total_timesteps=total_timesteps, progress_bar=True)
+            # model.learn(total_timesteps=total_timesteps, progress_bar=False)
             
             with open(f'{session_dir}/hyparam.yaml','a') as f:
                 hyparam_dict = {
@@ -103,12 +103,12 @@ def eval(model_dir, log_dir):
 
 if __name__ == '__main__':
     
-    # train()
+    train()
 
-    loaded_model = SAC.load('logs/experiment/2023-08-16.11:03:11/trial_1/session_1/trained_model.zip', verbose=1)
-    loaded_model.set_env(SubprocVecEnv([make_env(i) for i in range(24)]))
-    loaded_model.load_replay_buffer('logs/experiment/2023-08-16.11:03:11/trial_1/session_1/trained_model_replay_buffer.pkl')
-    loaded_model.learn(1_000_000, reset_num_timesteps=False, progress_bar=True)
+    # loaded_model = SAC.load('logs/experiment/2023-08-16.11:03:11/trial_1/session_1/trained_model.zip', verbose=1)
+    # loaded_model.set_env(SubprocVecEnv([make_env(i) for i in range(24)]))
+    # loaded_model.load_replay_buffer('logs/experiment/2023-08-16.11:03:11/trial_1/session_1/trained_model_replay_buffer.pkl')
+    # loaded_model.learn(1_000_000, reset_num_timesteps=False, progress_bar=True)
     
     # eval(model_dir='logs/experiment/2023-07-27.12:13:10/trial_1/session_1/best_model.zip', 
     #      log_dir='logs/experiment/2023-07-24.22:16:04/trial_1/session_1/eval')

@@ -22,5 +22,4 @@ total_obj:
 load_obj:
     [
         '004_sugar_box', 
-        '011_banana', 
     ]

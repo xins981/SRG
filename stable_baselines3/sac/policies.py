@@ -104,6 +104,7 @@ class Actor(BasePolicy):
             self.mu = nn.Linear(last_layer_dim, action_dim)
             self.log_std = nn.Linear(last_layer_dim, action_dim)  # type: ignore[assignment]
             self.score = nn.Linear(last_layer_dim, 1)
+            self.sigmoid = nn.Sigmoid()
 
 
     def _get_constructor_parameters(self) -> Dict[str, Any]:
@@ -155,112 +156,122 @@ class Actor(BasePolicy):
         
         features = self.extract_features(obs, self.features_extractor) # (B, N, 1088)
         latent_pi = self.latent_pi(features) # mlp (B, N, 256)
-        
-        num_pc_objs = int(self.observation_space.shape[0] * 0.8)
-        pts_objs = obs[:, :num_pc_objs, :3]
-        batch_size, channel_size = obs.shape[0], obs.shape[2]
-        score_thre = 0.5
-        center_num = 64
+        pred_score = self.sigmoid(self.score(latent_pi)).squeeze() # (B, N)
 
-        pred_score = self.score(latent_pi) # (B, N, 1)
-        pred_score = pred_score[:, :num_pc_objs, :]
-        pred_score = pred_score.cpu()
+        num_pts_objs = int(self.observation_space.shape[0] * 0.8)
+        pts_objs = obs[:, :num_pts_objs, :] # (B, num_obj, 3)
+        pred_score_objs = pred_score[:, :num_pts_objs] # (B, num_obj)
+        latent_pi_objs = latent_pi[:, :num_pts_objs, :] # (B, num_obj, 1088)
 
-        if batch_size == 1:
-            positive_pc_mask = (pred_score.view(-1) > score_thre)
-            positive_pc_mask = (pred_score.view(-1) > score_thre)
+        threshold_score = 0.5
+        num_anchor = 64
+        B, C = obs.shape[0], obs.shape[2]
+        if B == 1:
+            positive_pc_mask = (pred_score.view(-1) > threshold_score)
+            positive_pc_mask = (pred_score.view(-1) > threshold_score)
             positive_pc_mask = positive_pc_mask.cpu().numpy()
             map_index = th.Tensor(np.nonzero(positive_pc_mask)[0]).view(-1).long()
 
-            center_pc = th.full((center_num, channel_size), -1.0)
-            center_pc_index = th.full((center_num,), -1)
+            center_pc = th.full((num_anchor, C), -1.0)
+            center_pc_index = th.full((num_anchor,), -1)
 
-            pc = pc.view(-1,channel_size)
+            pc = pc.view(-1,C)
             cur_pc = pc[map_index,:]
-            if len(cur_pc) > center_num:
-                center_pc_index[i] = th.Tensor(np.random.choice(cur_pc.shape[0], center_num, replace=False))
-                # center_pc_index = _F.farthest_point_sample(cur_pc[:,:3].view(1,-1,3).transpose(2,1), center_num).view(-1)
+            if len(cur_pc) > num_anchor:
+                center_pc_index[i] = th.Tensor(np.random.choice(cur_pc.shape[0], num_anchor, replace=False))
+                # center_pc_index = _F.farthest_point_sample(cur_pc[:,:3].view(1,-1,3).transpose(2,1), num_anchor).view(-1)
 
                 center_pc_index = map_index[center_pc_index.long()]
                 center_pc = pc[center_pc_index.long()]
                 
             elif len(cur_pc) > 0:
                 center_pc_index[:len(cur_pc)] = th.arange(0, len(cur_pc))
-                center_pc_index[len(cur_pc):] = th.Tensor(np.random.choice(cur_pc.shape[0], center_num-len(cur_pc), replace=True))
+                center_pc_index[len(cur_pc):] = th.Tensor(np.random.choice(cur_pc.shape[0], num_anchor-len(cur_pc), replace=True))
                 center_pc_index = map_index[center_pc_index.long()]
                 center_pc = pc[center_pc_index.long()]
                 
             else:
-                center_pc_index = th.Tensor(np.random.choice(pc.shape[0], center_num, replace=False))
+                center_pc_index = th.Tensor(np.random.choice(pc.shape[0], num_anchor, replace=False))
                 center_pc = pc[center_pc_index.long()]
         
-            center_pc = center_pc.view(1,-1,channel_size)
+            center_pc = center_pc.view(1,-1,C)
             center_pc_index = center_pc_index.view(1,-1)
         
         else:
-            positive_pc_mask = (pred_score > score_thre)
+            positive_mask = (pred_score_objs > threshold_score)
+            anchor = th.full((B, num_anchor, C), -1.0)
+            anchor_index_in_pcd = th.full((B, num_anchor), -1)
+            anchor_feature = th.full((B, num_anchor, latent_pi_objs.shape[-1]), -1.0)
+            anchor_score = th.full((B, num_anchor), -1.0)
+            for i in range(B):
+                positive_pts = pts_objs[i, positive_mask[i], :]
 
-            center_pc = th.full((batch_size, center_num, channel_size), -1.0)
-            center_pc_index = th.full((batch_size, center_num), -1)
-            for i in range(batch_size):
-                cur_pc = pts_objs[i, positive_pc_mask[i], :3]
+                if len(positive_pts) > num_anchor:
+                    anchor_index_in_positive = th.Tensor(np.random.choice(positive_pts.shape[0], num_anchor, replace=False))
+                    # center_pc_index[i] = farthest_point_sample(positive_pts, num_anchor)
+                    # center_pc_index[i] = _F.farthest_point_sample(positive_pts[:,:3].view(1,-1,3).transpose(2,1), num_anchor).view(-1)
 
-                if len(cur_pc) > center_num:
-                    center_pc_index[i] = th.Tensor(np.random.choice(cur_pc.shape[0], center_num, replace=False))
-                    # center_pc_index[i] = farthest_point_sample(cur_pc, center_num)
-                    # center_pc_index[i] = _F.farthest_point_sample(cur_pc[:,:3].view(1,-1,3).transpose(2,1), center_num).view(-1)
-
-                    map_index = th.nonzero(positive_pc_mask[i]).view(-1)
-                    center_pc_index[i] = map_index[center_pc_index[i].long()]
-                    center_pc[i] = obs[i, center_pc_index[i].long()]
+                    positive_index_in_pcd = th.nonzero(positive_mask[i]).view(-1)
+                    index_in_pcd = positive_index_in_pcd[anchor_index_in_positive.long()]
+                    anchor_index_in_pcd[i] = index_in_pcd
+                    anchor[i] = pts_objs[i, index_in_pcd]
+                    anchor_feature[i] = latent_pi_objs[i, index_in_pcd]
+                    anchor_score[i] = pred_score_objs[i, index_in_pcd]
                     
-                elif len(cur_pc) > 0:
-                    center_pc_index[i,:len(cur_pc)] = th.arange(0, len(cur_pc))
-                    center_pc_index[i,len(cur_pc):] = th.Tensor(np.random.choice(cur_pc.shape[0], center_num-len(cur_pc), replace=True))
-                    #center_pc[i] = cur_pc[center_pc_index[i].long()]
+                elif len(positive_pts) > 0:
+                    positive_index = th.arange(0, len(positive_pts))
+                    padding_index = th.Tensor(np.random.choice(positive_pts.shape[0], num_anchor-len(positive_pts), replace=True))
+                    anchor_index_in_positive = th.cat((positive_index, padding_index))
 
-                    map_index = th.nonzero(positive_pc_mask[i]).view(-1)
-                    center_pc_index[i] = map_index[center_pc_index[i].long()]
-                    center_pc[i] = obs[i, center_pc_index[i].long()]
+                    positive_index_in_pcd = th.nonzero(positive_mask[i]).view(-1)
+                    index_in_pcd = positive_index_in_pcd[anchor_index_in_positive.long()]
+                    anchor_index_in_pcd[i] = index_in_pcd
+                    anchor[i] = pts_objs[i, index_in_pcd]
+                    anchor_feature[i] = latent_pi_objs[i, index_in_pcd]
+                    anchor_score[i] = pred_score_objs[i, index_in_pcd]
                     
                 else:
-                    center_pc_index[i] = th.Tensor(np.random.choice(pts_objs.shape[1], center_num, replace=False))
-                    center_pc[i] = obs[i, center_pc_index[i].long()]
-        center_pc = center_pc.cuda() # (B, K, 3)
-        center_pc_index = center_pc_index.cuda() # (B, K)
-        latent_pi = latent_pi[center_pc_index] # (B, K, 256)
-        center_pc_score = pred_score[center_pc_index] # (B, K, 1)
-        mean_actions = self.mu(latent_pi) # (B, K, 7)
+                    if pts_objs.shape[1] >= num_anchor:
+                        index_in_pcd = th.Tensor(np.random.choice(pts_objs.shape[1], num_anchor, replace=False)).long()
+                    else:
+                        index_in_pcd = th.Tensor(np.random.choice(pts_objs.shape[1], num_anchor, replace=True)).long()
+                    anchor_index_in_pcd[i] = index_in_pcd
+                    anchor[i] = pts_objs[i, index_in_pcd]
+                    anchor_feature[i] = latent_pi_objs[i, index_in_pcd]
+                    anchor_score[i] = pred_score_objs[i, index_in_pcd]
 
-        if self.use_sde:
-            return mean_actions, self.log_std, dict(latent_sde=latent_pi)
-        # Unstructured exploration (Original implementation)
-        log_std = self.log_std(latent_pi)  # (B, K, 7)
-        # Original Implementation to cap the standard deviation
+        anchor = anchor.cuda() # (B, K, 3)
+        anchor_score = anchor_score.cuda() # (B, K)
+        anchor_feature = anchor_feature.cuda() # (B, K, 256)
+        anchor_index_in_pcd = anchor_index_in_pcd.cuda() # (B, K) 
+
+        mean_actions = self.mu(anchor_feature) # (B, K, 7)
+        log_std = self.log_std(anchor_feature)  # (B, K, 7)
         log_std = th.clamp(log_std, LOG_STD_MIN, LOG_STD_MAX)
-        return mean_actions, log_std, center_pc, center_pc_index, center_pc_score, {}
+        
+        return mean_actions, log_std, anchor, anchor_index_in_pcd, anchor_score, {}
     
     
     def forward(self, obs: th.Tensor, deterministic: bool = False) -> th.Tensor:
         
-        mean_actions, log_std, center_pc, center_pc_index, center_pc_score, kwargs = self.get_action_dist_params(obs) # (B, N, 7)
+        mean_actions, log_std, anchor, anchor_index_in_pcd, anchor_score, kwargs = self.get_action_dist_params(obs) # (B, N, 7)
         # Note: the action is squashed
         params = self.action_dist.actions_from_params(mean_actions, log_std, deterministic=deterministic, **kwargs)
-        norm_params = self.to_normal_param(center_pc, params) # (B, K, 7)
-        norm_params = th.cat([norm_params, center_pc_index.unsqueeze(-1)], dim=-1)
+        norm_params = self.to_normal_param(anchor, params) # (B, K, 7)
+        norm_params_with_id = th.cat([norm_params, anchor_index_in_pcd.unsqueeze(-1)], dim=-1)
 
-        return norm_params, center_pc_score
+        return norm_params_with_id, anchor_score
 
     
     def action_log_prob(self, obs: th.Tensor) -> Tuple[th.Tensor, th.Tensor]:
 
-        mean_actions, log_std, center_pc, center_pc_index, center_pc_score, kwargs = self.get_action_dist_params(obs) # (B, N, 7)
+        mean_actions, log_std, anchor, anchor_index_in_pcd, anchor_score, kwargs = self.get_action_dist_params(obs) # (B, N, 7)
         # return action and associated log prob
         params, log_prob = self.action_dist.log_prob_from_params(mean_actions, log_std, **kwargs) # (B, K, 7) (B, K, 1)
-        norm_params = self.to_normal_param(center_pc, params)
-        norm_params = th.cat([norm_params, center_pc_index.unsqueeze(-1)], dim=-1)
+        norm_params = self.to_normal_param(anchor, params)
+        norm_params_with_id = th.cat([norm_params, anchor_index_in_pcd.unsqueeze(-1)], dim=-1)
         
-        return norm_params, log_prob, center_pc_score
+        return norm_params_with_id, log_prob, anchor_score
 
     
     def _predict(self, observation: th.Tensor, deterministic: bool = False) -> th.Tensor:

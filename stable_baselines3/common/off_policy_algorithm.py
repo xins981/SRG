@@ -371,7 +371,7 @@ class OffPolicyAlgorithm(BaseAlgorithm):
             unscaled_params = []
             for i in range(n_envs):
                 anchor_ind = np.array([np.random.randint(0, int(self.observation_space.shape[0] * 0.8))])
-                anchor = self._last_obs[i, anchor_ind, :3].squeeze()
+                anchor = self._last_obs[i, anchor_ind, :self._last_obs.shape[-1]].squeeze()
                 unscaled_param = self.action_space.sample()
                 axis_y_norm = np.linalg.norm(unscaled_param[3:6])
                 unscaled_param[3:6] /= axis_y_norm

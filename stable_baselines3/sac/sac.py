@@ -183,10 +183,10 @@ class SAC(OffPolicyAlgorithm):
                 next_action_log_prob = th.gather(next_log_prob.unsqueeze(-1), 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
                 next_joint_log_prob = th.log(next_action_score_prob) + next_action_log_prob # (B, )
                 next_param = th.gather(next_params, 1, next_anchor_index.unsqueeze(-1).expand(-1, -1, next_params.shape[-1])).squeeze() # (B, 8)
-                next_q = th.cat(self.critic_target(replay_data.next_observations, next_param), dim=2).min(dim=2).values # (B, 1)
+                next_q = th.cat(self.critic_target(replay_data.next_observations, next_param), dim=-1).min(dim=-1).values # (B,)
                 
                 # add entropy term
-                next_q_value_with_entropy = next_q - ent_coef * next_joint_log_prob # (B, )
+                next_q_value_with_entropy = next_q - ent_coef * next_joint_log_prob # (B,)
                 
                 # td error + entropy term; rewards:(B, 1), dones:(B, 1).
                 target_q = replay_data.rewards + (1 - replay_data.dones) * self.gamma * next_q_value_with_entropy.unsqueeze(-1)
@@ -216,7 +216,7 @@ class SAC(OffPolicyAlgorithm):
             new_action_log_prob = th.gather(new_log_prob.unsqueeze(-1), 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, 1)).squeeze() # (B, )
             new_joint_log_prob = th.log(new_action_score_prob) + new_action_log_prob # (B, )
             new_param = th.gather(new_params, 1, new_anchor_index.unsqueeze(-1).expand(-1, -1, new_params.shape[-1])).squeeze() # (B, 8)
-            new_q = th.cat(self.critic(replay_data.observations, new_param), dim=2).min(dim=2).values # (B, 1)
+            new_q = th.cat(self.critic(replay_data.observations, new_param), dim=-1).min(dim=-1).values # (B,)
             actor_loss = (ent_coef * new_joint_log_prob - new_q).mean()
             actor_losses.append(actor_loss.item())
            

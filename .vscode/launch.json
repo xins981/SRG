@@ -26,7 +26,6 @@
             "console": "integratedTerminal",
             "justMyCode": false,
             "env": { 
-                // "PYTHONPATH": "${workspaceFolder}",
                 "DISPLAY": ":10.0",
                 "CUDA_VISIBLE_DEVICES": "1",
             },
